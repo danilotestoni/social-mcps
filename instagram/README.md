@@ -2,7 +2,7 @@
 
 MCP server para publicar automáticamente en Instagram usando la Instagram Graph API. Se integra con cualquier cliente MCP (Claude Desktop, agentes propios, etc.) y expone herramientas que el agente puede invocar directamente.
 
-**Requisito importante:** Necesitas una cuenta Instagram de tipo **Business** o **Creator** vinculada a una Facebook Page. Las cuentas personales no tienen acceso a la Graph API de publicación.
+**Requisito importante:** Necesitas una cuenta Instagram de tipo **Creator** o **Business** vinculada a una Facebook Page. Las cuentas personales no tienen acceso a la Graph API de publicación.
 
 ---
 
@@ -10,28 +10,14 @@ MCP server para publicar automáticamente en Instagram usando la Instagram Graph
 
 | Herramienta | Parámetros | Descripción |
 |---|---|---|
-| `publish_post` | `caption` (obligatorio), `image_url` (obligatorio*) | Publica una foto con caption. Requiere una URL pública de imagen |
+| `publish_post` | `caption` (obligatorio), `image_url` (obligatorio) | Publica una foto con caption. Requiere una URL pública de imagen JPEG |
 | `get_last_posts` | `count` (opcional, por defecto 10) | Devuelve los últimos N posts del perfil |
 | `delete_post` | `media_id` (obligatorio) | Elimina un post por su media ID |
 | `get_account_info` | — | Devuelve username, nombre, seguidores y número de posts |
 
-> \* `image_path` (archivo local) no está soportado por la Instagram Graph API para posts de feed — la API solo acepta URLs públicas accesibles desde internet. Si se pasa `image_path`, el servidor lo indica con un error claro.
+> La Instagram Graph API **solo acepta URLs públicas de imágenes** (no archivos locales) para posts de feed. El formato recomendado es JPEG.
 
-### Endpoints de la API que usa este MCP
-
-| Operación | Método | Endpoint |
-|---|---|---|
-| Info de cuenta | GET | `https://graph.facebook.com/v21.0/{account-id}` |
-| Crear container de media | POST | `https://graph.facebook.com/v21.0/{account-id}/media` |
-| Estado del container | GET | `https://graph.facebook.com/v21.0/{container-id}?fields=status_code` |
-| Publicar container | POST | `https://graph.facebook.com/v21.0/{account-id}/media_publish` |
-| Leer posts | GET | `https://graph.facebook.com/v21.0/{account-id}/media` |
-| Eliminar post | DELETE | `https://graph.facebook.com/v21.0/{media-id}` |
-| Renovar token | GET | `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token` |
-
-### Flujo de publicación (2 pasos)
-
-Instagram no permite publicar en un solo paso. El servidor lo gestiona automáticamente:
+### Flujo de publicación (2 pasos, gestionado automáticamente)
 
 1. **Crear container:** envía la URL de imagen y el caption → Instagram descarga y procesa la imagen
 2. **Esperar:** polling del estado cada 3 segundos hasta que sea `FINISHED` (máx. 60 segundos)
@@ -42,50 +28,52 @@ Instagram no permite publicar en un solo paso. El servidor lo gestiona automáti
 ## Requisitos previos
 
 - Python 3.11 o superior
-- Cuenta Instagram Business o Creator vinculada a una Facebook Page
-- App en Meta for Developers con Instagram Graph API activado
+- Cuenta Instagram Creator o Business **vinculada a una Facebook Page**
+- La misma app de Meta for Developers que usas para Facebook
 
 ---
 
-## Fase 1 — Crear la app en Meta for Developers
+## Configuración
 
-### 1.1 Crear la aplicación
+### Paso 1 — Verificar cuenta Instagram profesional
 
-1. Ve a [developers.facebook.com](https://developers.facebook.com) e inicia sesión.
-2. **My Apps → Create App → tipo Business**.
-3. Rellena nombre y email de contacto.
+Tu cuenta de Instagram debe ser **Creator** o **Business** (no personal):
+- Instagram → **Configuración → Cuenta → Tipo de cuenta**
+- Si es personal: **Cambiar a cuenta profesional** → selecciona Creator
 
-### 1.2 Añadir Instagram Graph API
+### Paso 2 — Vincular Instagram a tu Facebook Page
 
-En el panel de la app: **Add a Product → Instagram → Set Up**.
+Desde la app de Instagram:
+- **Configuración → Cuenta → Cuenta profesional → Página de Facebook vinculada**
+- Debe mostrar tu Facebook Page (p. ej. "TechnoLoGeek")
+- Si no está vinculada: toca **Crear o conectar página** y selecciona la correcta
 
-### 1.3 Vincular tu cuenta Instagram
+### Paso 3 — Obtener tokens via Graph API Explorer
 
-Si tu cuenta de Instagram no es Business o Creator:
-1. Instagram → **Configuración → Cuenta → Cambiar a cuenta profesional**
-2. Vincula una Facebook Page cuando te lo pida
+> Usa la **misma app** que para Facebook. El mismo Page Access Token sirve para ambos servidores.
 
-### 1.4 Obtener APP_ID y APP_SECRET
+1. Ve a [developers.facebook.com/tools/explorer](https://developers.facebook.com/tools/explorer)
+2. En **Meta App**, selecciona tu app (p. ej. TechnoLoGeek)
+3. Haz clic en **Add a Permission** y añade **los 5 permisos**:
+   - `instagram_basic`
+   - `instagram_content_publish`
+   - `pages_show_list`
+   - `pages_read_engagement`
+   - `pages_manage_posts`
+4. Haz clic en **Generate Access Token** y aprueba todos
+5. En el campo de URL escribe:
+   ```
+   /{slug-de-tu-pagina}?fields=id,instagram_business_account,access_token
+   ```
+   Por ejemplo: `/elsacapuntes?fields=id,instagram_business_account,access_token`
+6. Haz clic en **Enviar**
+7. Del resultado, copia:
+   - `access_token` → `INSTAGRAM_ACCESS_TOKEN`
+   - `instagram_business_account.id` → `INSTAGRAM_ACCOUNT_ID`
 
-En **Configuración → Básica**:
-- **Identificador de la app** → `INSTAGRAM_APP_ID`
-- **Clave secreta** → `INSTAGRAM_APP_SECRET`
+> **Clave:** El `access_token` de este resultado es un **Page Access Token permanente** con permisos de Instagram heredados del User Token. Nunca caduca.
 
----
-
-## Fase 2 — Obtener el token de acceso
-
-> Con la app en **modo producción (publicada)** el flujo OAuth estándar tiene restricciones. El método más fiable es obtener el token directamente desde el panel de Instagram en Meta.
-
-### Método directo desde el panel de Meta (recomendado)
-
-1. En tu app de Meta, ve al producto **Instagram**
-2. Busca la sección **"Genera identificadores de acceso"**
-3. Añade tu cuenta de Instagram si no está ya
-4. Copia el **identificador de acceso** que aparece → `INSTAGRAM_ACCESS_TOKEN`
-5. Copia el **ID de cuenta** → `INSTAGRAM_ACCOUNT_ID`
-
-### Configurar el .env
+### Paso 4 — Configurar el .env
 
 ```bash
 cd instagram
@@ -96,22 +84,21 @@ cp .env.example .env
 Edita `.env` con los valores obtenidos:
 
 ```env
-INSTAGRAM_APP_ID=tu_app_id
+INSTAGRAM_APP_ID=858814230609482
 INSTAGRAM_APP_SECRET=tu_app_secret
-INSTAGRAM_ACCESS_TOKEN=el_token_obtenido
-INSTAGRAM_TOKEN_EXPIRY=1786060800
-INSTAGRAM_ACCOUNT_ID=tu_account_id
+INSTAGRAM_ACCESS_TOKEN=EAAMNFkU...  (el access_token del resultado de la consulta)
+INSTAGRAM_TOKEN_EXPIRY=0
+INSTAGRAM_ACCOUNT_ID=17841400518040781  (el instagram_business_account.id)
 ```
 
-> Para calcular `INSTAGRAM_TOKEN_EXPIRY`: es el timestamp Unix de hoy + 60 días. Los tokens generados desde el panel de Meta tienen una validez aproximada de 60 días.
-
-No hace falta ejecutar `oauth_setup.py` si has seguido el método directo.
+`INSTAGRAM_TOKEN_EXPIRY=0` indica que el token nunca caduca (Page Access Token permanente).
 
 ---
 
 ## Arrancar el servidor
 
 ```bash
+cd instagram
 python server.py
 ```
 
@@ -134,9 +121,11 @@ python server.py
 
 ## Tokens y renovación
 
-El servidor comprueba la fecha de expiración antes de cada llamada. Si el token ha caducado, intenta renovarlo automáticamente. Si faltan menos de 7 días para que caduque, registra un aviso en el log.
+El **Page Access Token permanente** no caduca. Solo necesitas renovarlo si:
+- Revocast los permisos de la app desde la configuración de Facebook o Instagram
+- La app es suspendida por Meta
 
-Cuando el token caduque, vuelve al panel de Meta → Instagram → **Genera identificadores de acceso** y actualiza `INSTAGRAM_ACCESS_TOKEN` en el `.env`.
+Si el servidor empieza a dar errores de autenticación (código 190), repite desde el Paso 3.
 
 ---
 

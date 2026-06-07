@@ -28,71 +28,51 @@ A diferencia de Instagram, Facebook **sí admite subida binaria de imágenes loc
 | Leer posts | GET | `https://graph.facebook.com/v21.0/{page-id}/posts` |
 | Eliminar post | DELETE | `https://graph.facebook.com/v21.0/{post-id}` |
 
-### Modos de publicación
-
-```
-publish_post(message="Solo texto")
-  → POST /{page-id}/feed
-
-publish_post(message="...", image_url="https://dominio.com/foto.jpg")
-  → POST /{page-id}/photos con parámetro url
-
-publish_post(message="...", image_path="C:/fotos/imagen.jpg")
-  → POST /{page-id}/photos multipart (subida binaria directa)
-```
-
 ---
 
 ## Requisitos previos
 
 - Python 3.11 o superior
 - Una Facebook Page de la que seas administrador
-- Una app en Meta for Developers
+- Una app en Meta for Developers (se puede reutilizar la misma que para Instagram)
 
 ---
 
-## Fase 1 — Crear la app en Meta for Developers
+## Configuración
 
-### 1.1 Crear la aplicación
+### Paso 1 — Crear la app en Meta for Developers (solo la primera vez)
 
 1. Ve a [developers.facebook.com](https://developers.facebook.com) e inicia sesión.
 2. **My Apps → Create App → tipo Business**.
 3. Rellena nombre y email.
+4. En **Add a Product** añade **Facebook Login → Set Up → Web**.
 
-### 1.2 Añadir Facebook Login
+### Paso 2 — Obtener el Page Access Token via Graph API Explorer
 
-En **Add a Product → Facebook Login → Set Up → Web**.
-
-### 1.3 Obtener APP_ID y APP_SECRET
-
-En **Configuración → Básica**:
-- **Identificador de la app** → `FACEBOOK_APP_ID`
-- **Clave secreta** → `FACEBOOK_APP_SECRET`
-
----
-
-## Fase 2 — Obtener el Page Access Token
-
-> Con la app en **modo producción (publicada)**, el flujo OAuth con `oauth_setup.py` no funciona (Facebook no permite `localhost` como redirect en producción). El método más fiable es el **Graph API Explorer**.
-
-### Método: Graph API Explorer (recomendado)
+> Este es el método recomendado. Funciona con la app en modo Publicada (producción).
 
 1. Ve a [developers.facebook.com/tools/explorer](https://developers.facebook.com/tools/explorer)
-2. En **Aplicación de Meta**, selecciona tu app
-3. En el panel **Permissions**, añade:
-   - `pages_show_list`
+2. En **Meta App**, selecciona tu app
+3. Haz clic en **Add a Permission** y añade:
    - `pages_manage_posts`
    - `pages_read_engagement`
-4. Haz clic en **Generate Access Token** y aprueba los permisos
+   - `pages_show_list`
+   - `instagram_basic` *(añadir también si vas a usar el servidor Instagram)*
+   - `instagram_content_publish` *(añadir también si vas a usar el servidor Instagram)*
+4. Haz clic en **Generate Access Token** y aprueba todos los permisos
 5. En el campo de URL escribe:
    ```
    /{slug-de-tu-pagina}?fields=id,name,access_token
    ```
    Por ejemplo: `/elsacapuntes?fields=id,name,access_token`
 6. Haz clic en **Enviar**
-7. Copia el `access_token` y el `id` del resultado
+7. Del resultado, copia:
+   - `id` → `FACEBOOK_PAGE_ID`
+   - `access_token` → `FACEBOOK_ACCESS_TOKEN`
 
-### Configurar el .env
+> **Nota:** El `access_token` devuelto aquí es un **Page Access Token permanente** (nunca caduca). Es distinto del User Access Token del paso 4. Asegúrate de copiar el del resultado de la consulta, no el del panel superior.
+
+### Paso 3 — Configurar el .env
 
 ```bash
 cd facebook
@@ -103,22 +83,21 @@ cp .env.example .env
 Edita `.env` con los valores obtenidos:
 
 ```env
-FACEBOOK_APP_ID=tu_app_id
+FACEBOOK_APP_ID=858814230609482
 FACEBOOK_APP_SECRET=tu_app_secret
-FACEBOOK_ACCESS_TOKEN=el_token_obtenido
+FACEBOOK_ACCESS_TOKEN=EAAMNFkU...  (el access_token del resultado de la consulta)
 FACEBOOK_TOKEN_EXPIRY=0
-FACEBOOK_PAGE_ID=el_id_de_la_pagina
+FACEBOOK_PAGE_ID=323737177695674  (el id del resultado de la consulta)
 ```
 
-`FACEBOOK_TOKEN_EXPIRY=0` significa que el token nunca caduca (es un Page Access Token permanente).
-
-> **Atención:** Los tokens generados desde el Graph API Explorer pueden caducar en horas o días si son User Access Tokens, no Page Access Tokens. Si el servidor empieza a dar errores de autenticación, vuelve al explorador y repite el proceso. Para obtener un Page Access Token permanente, la app necesita pasar App Review en Meta para los permisos `pages_manage_posts` y `pages_show_list`.
+`FACEBOOK_TOKEN_EXPIRY=0` indica que el token nunca caduca (Page Access Token permanente).
 
 ---
 
 ## Arrancar el servidor
 
 ```bash
+cd facebook
 python server.py
 ```
 
@@ -141,7 +120,11 @@ python server.py
 
 ## Tokens y renovación
 
-Con un **Page Access Token permanente** (obtenido de una app con App Review aprobado), no necesitas renovar nunca. Con tokens del Graph API Explorer, actualiza `FACEBOOK_ACCESS_TOKEN` en el `.env` cuando caduquen repitiendo el proceso del explorador.
+El **Page Access Token permanente** no caduca. Solo necesitas renovarlo si:
+- Revocast los permisos de la app desde la configuración de Facebook
+- La app es suspendida por Meta
+
+Si el servidor empieza a dar errores de autenticación, repite el Paso 2 del Graph API Explorer.
 
 ---
 

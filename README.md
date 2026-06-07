@@ -9,6 +9,7 @@ Sistema de MCP servers en Python para publicación automática en redes sociales
 | `linkedin/` | LinkedIn | UGC Posts API | publish_post, get_last_posts, delete_post, get_account_info |
 | `instagram/` | Instagram | Instagram Graph API | publish_post, get_last_posts, delete_post, get_account_info |
 | `facebook/` | Facebook | Pages API | publish_post, get_last_posts, delete_post, get_account_info |
+| `threads/` | Threads | Threads API v1.0 | publish_post, get_last_posts, delete_post, get_account_info |
 | `wordpress/` | WordPress.com | REST API v1.1 | publish_post, get_last_posts, delete_post, get_account_info |
 
 ---
@@ -21,6 +22,7 @@ Cada MCP server se lanza como un proceso independiente en modo stdio. El cliente
 Cliente MCP  ──stdin/stdout──►  linkedin/server.py   ──►  LinkedIn API
              ──stdin/stdout──►  instagram/server.py  ──►  Instagram API
              ──stdin/stdout──►  facebook/server.py   ──►  Facebook API
+             ──stdin/stdout──►  threads/server.py    ──►  Threads API
              ──stdin/stdout──►  wordpress/server.py  ──►  WordPress.com API
 ```
 
@@ -58,8 +60,9 @@ Cada plataforma tiene su propio proceso de configuración en dos fases. Lee el R
 | Plataforma | Portal | Notas |
 |---|---|---|
 | LinkedIn | [linkedin.com/developers/apps](https://www.linkedin.com/developers/apps) | Activar productos "Share on LinkedIn" y "Sign In with LinkedIn" |
-| Instagram | [developers.facebook.com](https://developers.facebook.com) | App de tipo Business, añadir producto Instagram Graph API. Requiere cuenta Business/Creator |
-| Facebook | [developers.facebook.com](https://developers.facebook.com) | Se puede reutilizar la misma app que Instagram |
+| Instagram | [developers.facebook.com](https://developers.facebook.com) | Misma app que Facebook. Requiere cuenta Creator o Business vinculada a una Page |
+| Facebook | [developers.facebook.com](https://developers.facebook.com) | Misma app que Instagram. Token vía Graph API Explorer |
+| Threads | [developers.facebook.com](https://developers.facebook.com) | App separada con producto Threads API. Token desde el panel de Meta |
 | WordPress | [developer.wordpress.com/apps](https://developer.wordpress.com/apps) | El más sencillo, sin revisión ni restricciones |
 
 ---
@@ -80,6 +83,7 @@ social-mcps/
 │   └── logs/           # Logs persistentes (gitignored)
 ├── instagram/          # Misma estructura
 ├── facebook/           # Misma estructura
+├── threads/            # Misma estructura
 └── wordpress/          # Misma estructura
 ```
 
@@ -110,6 +114,10 @@ Para usar todos los MCPs simultáneamente, añade cada uno a `claude_desktop_con
     "facebook": {
       "command": "python",
       "args": ["/ruta/absoluta/social-mcps/facebook/server.py"]
+    },
+    "threads": {
+      "command": "python",
+      "args": ["/ruta/absoluta/social-mcps/threads/server.py"]
     },
     "wordpress": {
       "command": "python",

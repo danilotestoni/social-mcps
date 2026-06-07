@@ -50,25 +50,20 @@ class LinkedInClient:
 
     @_retried
     async def get_profile(self) -> ProfileInfo:
+        # OpenID Connect userinfo endpoint — works with the 'profile' scope
         headers = await self._headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
-            response = await client.get(
-                "/v2/me",
-                params={"projection": "(id,firstName,lastName)"},
-                headers=headers,
-            )
+            response = await client.get("/v2/userinfo", headers=headers)
         self._raise_for_status(response)
         data = response.json()
-        person_id = data["id"]
+        # 'sub' is the full person URN: urn:li:person:xxxx
+        person_urn = data["sub"]
+        person_id = person_urn.split(":")[-1]
         return ProfileInfo(
             id=person_id,
-            first_name=data["firstName"]["localized"][
-                next(iter(data["firstName"]["localized"]))
-            ],
-            last_name=data["lastName"]["localized"][
-                next(iter(data["lastName"]["localized"]))
-            ],
-            person_urn=f"urn:li:person:{person_id}",
+            first_name=data.get("given_name", ""),
+            last_name=data.get("family_name", ""),
+            person_urn=person_urn,
         )
 
     @_retried

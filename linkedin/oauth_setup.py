@@ -22,7 +22,7 @@ from dotenv import dotenv_values, set_key
 _ENV_PATH = Path(__file__).parent / ".env"
 _TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
 _AUTH_URL = "https://www.linkedin.com/oauth/v2/authorization"
-_SCOPES = "r_liteprofile w_member_social r_member_social"
+_SCOPES = "openid profile email w_member_social"
 _REDIRECT_URI = "https://www.linkedin.com/developers/tools/oauth/redirect"
 
 
@@ -81,19 +81,17 @@ def _exchange_code(client_id: str, client_secret: str, code: str) -> dict:
 
 
 def _fetch_person_urn(access_token: str) -> str:
+    # OpenID Connect userinfo endpoint — works with the 'profile' scope
     response = httpx.get(
-        "https://api.linkedin.com/v2/me",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "LinkedIn-Version": "202401",
-        },
+        "https://api.linkedin.com/v2/userinfo",
+        headers={"Authorization": f"Bearer {access_token}"},
     )
     if response.status_code != 200:
         print(f"ERROR: Could not fetch profile ({response.status_code}):")
         print(response.text)
         sys.exit(1)
-    person_id = response.json()["id"]
-    return f"urn:li:person:{person_id}"
+    # 'sub' is the full person URN: urn:li:person:xxxx
+    return response.json()["sub"]
 
 
 def main() -> None:

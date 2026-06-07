@@ -1,17 +1,31 @@
 # LinkedIn MCP
 
-MCP server para publicar automáticamente en LinkedIn usando la API de UGC Posts. Se integra con cualquier cliente MCP (Claude Desktop, agentes propios, etc.) y expone cuatro herramientas que el agente puede invocar directamente.
+MCP server para publicar automáticamente en LinkedIn usando la API de UGC Posts. Se integra con cualquier cliente MCP (Claude Desktop, agentes propios, etc.) y expone herramientas que el agente puede invocar directamente.
 
-## Qué hace
+---
 
-| Herramienta | Descripción |
-|---|---|
-| `publish_post` | Publica un post en LinkedIn, con texto solo o con imagen (URL pública o archivo local) |
-| `get_last_posts` | Devuelve los últimos N posts del perfil autenticado |
-| `delete_post` | Elimina un post por su URN |
-| `get_account_info` | Devuelve información del perfil (nombre, headline) |
+## Herramientas disponibles
 
-El MCP recibe el contenido ya formateado. No adapta ni transforma texto. Si el access token está próximo a caducar (menos de 7 días), registra un aviso en el log. Si ya ha caducado, lo renueva automáticamente con el refresh token y actualiza el `.env`.
+| Herramienta | Parámetros | Descripción |
+|---|---|---|
+| `publish_post` | `text` (obligatorio), `image_url` (opcional), `image_path` (opcional) | Publica un post. Si se pasan los dos parámetros de imagen, `image_path` tiene prioridad |
+| `get_last_posts` | `count` (opcional, por defecto 10) | Devuelve los últimos N posts del perfil autenticado |
+| `delete_post` | `post_urn` (obligatorio) | Elimina un post por su URN (p.ej. `urn:li:ugcPost:123456789`) |
+| `get_account_info` | — | Devuelve id, nombre y URN del perfil autenticado |
+
+### Endpoints de la API que usa este MCP
+
+| Operación | Método | Endpoint |
+|---|---|---|
+| Perfil | GET | `https://api.linkedin.com/v2/userinfo` |
+| Publicar post | POST | `https://api.linkedin.com/v2/ugcPosts` |
+| Leer posts | GET | `https://api.linkedin.com/v2/ugcPosts?q=authors` |
+| Eliminar post | DELETE | `https://api.linkedin.com/v2/ugcPosts/{urn}` |
+| Registrar subida imagen | POST | `https://api.linkedin.com/v2/assets?action=registerUpload` |
+| Subir imagen | PUT | URL presignada devuelta por el registro |
+| Renovar token | POST | `https://www.linkedin.com/oauth/v2/accessToken` |
+
+> **Nota:** `get_last_posts` requiere el producto **Marketing Developer Platform** en tu app LinkedIn (tiene proceso de revisión). Si no lo tienes, devuelve error 403 — el resto de herramientas funciona igualmente.
 
 ---
 
@@ -25,31 +39,29 @@ El MCP recibe el contenido ya formateado. No adapta ni transforma texto. Si el a
 
 ## Fase 1 — Crear la app en LinkedIn Developer Portal
 
-Este paso es manual y solo se hace una vez. Obtienes el `CLIENT_ID` y `CLIENT_SECRET`.
-
 ### 1.1 Crear la aplicación
 
 1. Ve a [linkedin.com/developers/apps](https://www.linkedin.com/developers/apps) e inicia sesión.
 2. Haz clic en **Create app**.
-3. Rellena los campos:
+3. Rellena:
    - **App name**: el nombre que quieras (p.ej. `social-mcps`)
-   - **LinkedIn Page**: necesitas asociar una LinkedIn Page. Si no tienes, crea una desde [linkedin.com/company/setup/new](https://www.linkedin.com/company/setup/new) (puede ser una página vacía, solo es un requisito formal).
+   - **LinkedIn Page**: asocia cualquier LinkedIn Page. Si no tienes, crea una en [linkedin.com/company/setup/new](https://www.linkedin.com/company/setup/new) — puede estar vacía, es solo un requisito formal.
    - **App logo**: sube cualquier imagen.
 4. Acepta los términos y haz clic en **Create app**.
 
 ### 1.2 Activar los productos necesarios
 
-En la app recién creada, ve a la pestaña **Products** y solicita acceso a:
+En la pestaña **Products**, solicita acceso a:
 
-- **Share on LinkedIn** — permite publicar posts (`w_member_social`)
-- **Sign In with LinkedIn using OpenID Connect** — permite leer el perfil (`r_liteprofile`, `openid`, `profile`, `email`)
+- **Share on LinkedIn** — aprobación automática e inmediata
+- **Sign In with LinkedIn using OpenID Connect** — aprobación automática e inmediata
 
-Haz clic en **Request access** en cada uno. La aprobación de "Share on LinkedIn" es automática e inmediata.
+Sin estos dos productos el OAuth fallará con error de scope no autorizado.
 
 ### 1.3 Configurar la URL de redirección
 
 1. Ve a la pestaña **Auth**.
-2. En **Authorized redirect URLs for your app**, añade exactamente esta URL:
+2. En **Authorized redirect URLs for your app**, añade:
    ```
    https://www.linkedin.com/developers/tools/oauth/redirect
    ```
@@ -57,15 +69,13 @@ Haz clic en **Request access** en cada uno. La aprobación de "Share on LinkedIn
 
 ### 1.4 Copiar las credenciales
 
-En la pestaña **Auth**, copia:
+En la pestaña **Auth**:
 - **Client ID** → `LINKEDIN_CLIENT_ID`
 - **Client Secret** → `LINKEDIN_CLIENT_SECRET`
 
-> **Nota sobre scopes y app review:** Los scopes `r_liteprofile` y `w_member_social` están disponibles sin revisión manual si has activado los productos de arriba. El scope `r_member_social` (para leer posts propios) requiere el producto **Marketing Developer Platform**, que sí tiene proceso de revisión. Si no lo tienes, `get_last_posts` devolverá un error de permisos — el resto de herramientas funcionará igualmente.
-
 ---
 
-## Fase 2 — Configuración inicial (oauth_setup.py)
+## Fase 2 — Configuración inicial
 
 ```bash
 cd linkedin
@@ -75,19 +85,27 @@ cp .env.example .env
 
 Edita `.env` y rellena `LINKEDIN_CLIENT_ID` y `LINKEDIN_CLIENT_SECRET`. Deja el resto vacío.
 
-Luego ejecuta el asistente de autorización:
-
 ```bash
 python oauth_setup.py
 ```
 
-El script te guiará para:
-1. Abrir la URL de autorización en el navegador
-2. Aprobar los permisos en LinkedIn
-3. Pegar el código o la URL de redirección
-4. Obtener los tokens y escribirlos automáticamente en `.env`
+El script:
+1. Genera la URL de autorización y te la muestra
+2. Abres la URL en el navegador y apruebas los permisos en LinkedIn
+3. LinkedIn te redirige a una página que muestra el código durante 5 segundos — **copia la URL completa de la barra del navegador** antes de que desaparezca
+4. Pegas esa URL en la terminal
+5. El script obtiene los tokens y escribe en `.env`: `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_REFRESH_TOKEN`, `LINKEDIN_TOKEN_EXPIRY` y `LINKEDIN_PERSON_URN`
 
-Al terminar, el `.env` quedará completo con `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_REFRESH_TOKEN`, `LINKEDIN_TOKEN_EXPIRY` y `LINKEDIN_PERSON_URN`.
+### Importante: revisar el LINKEDIN_PERSON_URN
+
+Después del setup, abre `.env` y comprueba que `LINKEDIN_PERSON_URN` tiene el formato completo:
+```
+LINKEDIN_PERSON_URN=urn:li:person:XXXXXXXXXX
+```
+Si solo tiene el ID sin el prefijo, añádelo manualmente:
+```
+LINKEDIN_PERSON_URN=urn:li:person:QYnCA_Ds26
+```
 
 ---
 
@@ -97,15 +115,12 @@ Al terminar, el `.env` quedará completo con `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_
 python server.py
 ```
 
-El servidor arranca en modo stdio y queda a la espera de llamadas MCP.
-
 ---
 
-## Configuración en el cliente MCP
+## Configuración en Claude Desktop
 
-### Claude Desktop
-
-Añade esto a `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -118,21 +133,26 @@ Añade esto a `~/Library/Application Support/Claude/claude_desktop_config.json` 
 }
 ```
 
-Reinicia Claude Desktop. El servidor aparecerá disponible en la interfaz.
+En Windows usa barras invertidas dobles o barras normales:
+```json
+"args": ["C:/Users/TuUsuario/social-mcps/linkedin/server.py"]
+```
 
 ---
 
-## Tokens y renovación automática
+## Tokens y renovación
 
 | Token | Duración | Gestión |
 |---|---|---|
-| Access token | 60 días | Se renueva automáticamente si hay refresh token válido |
+| Access token | 60 días | Se renueva automáticamente con el refresh token |
 | Refresh token | 365 días | Se renueva al usarlo |
 
-Si el refresh token también ha caducado (sin actividad durante más de 365 días), el servidor devolverá un error de autenticación. En ese caso, vuelve a ejecutar `oauth_setup.py`.
+El servidor avisa en el log 7 días antes de que caduque el access token. Si el refresh token también ha caducado (más de 365 días sin usar), vuelve a ejecutar `oauth_setup.py`.
+
+> **Nota:** Algunas apps de LinkedIn no devuelven refresh token en la primera autorización. Si ocurre, el acceso dura 60 días y habrá que volver a ejecutar `oauth_setup.py` al expirar.
 
 ---
 
 ## Logs
 
-Los errores y eventos se registran en `logs/linkedin.log` con rotación automática (5 MB × 3 archivos). El servidor escribe a `stderr` en lugar de `stdout` para no interferir con el protocolo MCP stdio.
+`logs/linkedin.log` — rotación automática (5 MB × 3 archivos). El servidor escribe a `stderr` para no interferir con el protocolo MCP stdio.

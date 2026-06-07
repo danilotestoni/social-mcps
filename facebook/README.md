@@ -1,21 +1,45 @@
 # Facebook MCP
 
-MCP server para publicar automáticamente en una Facebook Page usando la Pages API con OAuth 2.0. Se integra con cualquier cliente MCP (Claude Desktop, agentes propios, etc.) y expone cuatro herramientas que el agente puede invocar directamente.
+MCP server para publicar automáticamente en una Facebook Page usando la Pages API con Graph API v21.0. Se integra con cualquier cliente MCP (Claude Desktop, agentes propios, etc.) y expone herramientas que el agente puede invocar directamente.
 
 **Requisito importante:** Publicas en una **Facebook Page**, no en un perfil personal. Debes ser administrador de la Page.
 
-## Qué hace
+---
 
-| Herramienta | Descripción |
-|---|---|
-| `publish_post` | Publica un post en la Page: texto solo, imagen desde URL pública, o imagen desde archivo local |
-| `get_last_posts` | Devuelve los últimos N posts de la Page |
-| `delete_post` | Elimina un post por su ID |
-| `get_account_info` | Devuelve información de la Page (nombre, categoría, seguidores, fans) |
+## Herramientas disponibles
 
-El MCP recibe el contenido ya formateado. No adapta ni transforma texto.
+| Herramienta | Parámetros | Descripción |
+|---|---|---|
+| `publish_post` | `message` (obligatorio), `image_url` (opcional), `image_path` (opcional) | Publica un post en la Page. Si se pasan los dos parámetros de imagen, `image_path` tiene prioridad |
+| `get_last_posts` | `count` (opcional, por defecto 10) | Devuelve los últimos N posts de la Page |
+| `delete_post` | `post_id` (obligatorio) | Elimina un post por su ID (p.ej. `323737177695674_987654321`) |
+| `get_account_info` | — | Devuelve nombre, categoría, fans y seguidores de la Page |
 
-A diferencia de Instagram, Facebook sí admite subida binaria de imágenes locales directamente, sin necesidad de URL pública.
+A diferencia de Instagram, Facebook **sí admite subida binaria de imágenes locales** directamente desde archivo.
+
+### Endpoints de la API que usa este MCP
+
+| Operación | Método | Endpoint |
+|---|---|---|
+| Info de la Page | GET | `https://graph.facebook.com/v21.0/{page-id}` |
+| Publicar post de texto | POST | `https://graph.facebook.com/v21.0/{page-id}/feed` |
+| Publicar foto (URL) | POST | `https://graph.facebook.com/v21.0/{page-id}/photos` con `url` |
+| Publicar foto (archivo) | POST | `https://graph.facebook.com/v21.0/{page-id}/photos` multipart con `source` |
+| Leer posts | GET | `https://graph.facebook.com/v21.0/{page-id}/posts` |
+| Eliminar post | DELETE | `https://graph.facebook.com/v21.0/{post-id}` |
+
+### Modos de publicación
+
+```
+publish_post(message="Solo texto")
+  → POST /{page-id}/feed
+
+publish_post(message="...", image_url="https://dominio.com/foto.jpg")
+  → POST /{page-id}/photos con parámetro url
+
+publish_post(message="...", image_path="C:/fotos/imagen.jpg")
+  → POST /{page-id}/photos multipart (subida binaria directa)
+```
 
 ---
 
@@ -23,60 +47,52 @@ A diferencia de Instagram, Facebook sí admite subida binaria de imágenes local
 
 - Python 3.11 o superior
 - Una Facebook Page de la que seas administrador
-- Una Meta (Facebook) Developer App (ver Fase 1)
-
-> Si ya configuraste el MCP de Instagram, puedes reutilizar la **misma app de Meta**. Solo necesitas añadir los permisos de Pages que se indican más abajo.
+- Una app en Meta for Developers
 
 ---
 
 ## Fase 1 — Crear la app en Meta for Developers
 
-Este paso es manual y solo se hace una vez. Obtienes el `APP_ID` y `APP_SECRET`.
+### 1.1 Crear la aplicación
 
-### 1.1 Crear la aplicación (o reutilizar la de Instagram)
-
-**Opción A — App nueva:**
 1. Ve a [developers.facebook.com](https://developers.facebook.com) e inicia sesión.
-2. Haz clic en **My Apps → Create App**.
-3. Selecciona el tipo **Business**.
-4. Rellena nombre y email de contacto y haz clic en **Create App**.
+2. **My Apps → Create App → tipo Business**.
+3. Rellena nombre y email.
 
-**Opción B — Reutilizar la app de Instagram:**
-Usa el mismo `APP_ID` y `APP_SECRET`. Solo asegúrate de que la app tiene los permisos de Pages configurados (ver 1.3).
+### 1.2 Añadir Facebook Login
 
-### 1.2 Añadir el producto Facebook Login
+En **Add a Product → Facebook Login → Set Up → Web**.
 
-1. En el panel de la app, ve a **Add a Product**.
-2. Busca **Facebook Login** y haz clic en **Set Up**.
-3. Selecciona **Web** como plataforma.
+### 1.3 Obtener APP_ID y APP_SECRET
 
-### 1.3 Configurar la URL de redirección
-
-1. En **Facebook Login → Configuración**, añade en **Valid OAuth Redirect URIs**:
-   ```
-   https://www.facebook.com/connect/login_success.html
-   ```
-2. Guarda los cambios.
-
-### 1.4 Permisos necesarios
-
-En el modo desarrollo, estos permisos están disponibles sin revisión para las cuentas que son administradoras de la app:
-
-- `pages_manage_posts` — publicar y eliminar posts en la Page
-- `pages_read_engagement` — leer posts existentes
-- `pages_show_list` — listar las Pages del usuario
-
-Para publicar en producción desde cuentas que no son admins de la app, necesitarás pasar el proceso de **App Review** en Meta y solicitar estos permisos. Para uso personal o en equipo donde todos son admins, el modo desarrollo es suficiente.
-
-### 1.5 Copiar las credenciales
-
-En **Configuración → Básico**, copia:
-- **App ID** → `FACEBOOK_APP_ID`
-- **App Secret** → `FACEBOOK_APP_SECRET`
+En **Configuración → Básica**:
+- **Identificador de la app** → `FACEBOOK_APP_ID`
+- **Clave secreta** → `FACEBOOK_APP_SECRET`
 
 ---
 
-## Fase 2 — Configuración inicial (oauth_setup.py)
+## Fase 2 — Obtener el Page Access Token
+
+> Con la app en **modo producción (publicada)**, el flujo OAuth con `oauth_setup.py` no funciona (Facebook no permite `localhost` como redirect en producción). El método más fiable es el **Graph API Explorer**.
+
+### Método: Graph API Explorer (recomendado)
+
+1. Ve a [developers.facebook.com/tools/explorer](https://developers.facebook.com/tools/explorer)
+2. En **Aplicación de Meta**, selecciona tu app
+3. En el panel **Permissions**, añade:
+   - `pages_show_list`
+   - `pages_manage_posts`
+   - `pages_read_engagement`
+4. Haz clic en **Generate Access Token** y aprueba los permisos
+5. En el campo de URL escribe:
+   ```
+   /{slug-de-tu-pagina}?fields=id,name,access_token
+   ```
+   Por ejemplo: `/elsacapuntes?fields=id,name,access_token`
+6. Haz clic en **Enviar**
+7. Copia el `access_token` y el `id` del resultado
+
+### Configurar el .env
 
 ```bash
 cd facebook
@@ -84,22 +100,19 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edita `.env` y rellena `FACEBOOK_APP_ID` y `FACEBOOK_APP_SECRET`. Deja el resto vacío.
+Edita `.env` con los valores obtenidos:
 
-Luego ejecuta el asistente de autorización:
-
-```bash
-python oauth_setup.py
+```env
+FACEBOOK_APP_ID=tu_app_id
+FACEBOOK_APP_SECRET=tu_app_secret
+FACEBOOK_ACCESS_TOKEN=el_token_obtenido
+FACEBOOK_TOKEN_EXPIRY=0
+FACEBOOK_PAGE_ID=el_id_de_la_pagina
 ```
 
-El script te guiará para:
-1. Abrir la URL de autorización en el navegador
-2. Aprobar los permisos con tu cuenta de Facebook
-3. Pegar el código o la URL de redirección
-4. Listar tus Pages y seleccionar la correcta (si tienes varias)
-5. Escribir el Page Access Token y el Page ID en `.env`
+`FACEBOOK_TOKEN_EXPIRY=0` significa que el token nunca caduca (es un Page Access Token permanente).
 
-Al terminar, el `.env` quedará completo con `FACEBOOK_ACCESS_TOKEN` (tipo Page Token), `FACEBOOK_TOKEN_EXPIRY=0` (nunca caduca) y `FACEBOOK_PAGE_ID`.
+> **Atención:** Los tokens generados desde el Graph API Explorer pueden caducar en horas o días si son User Access Tokens, no Page Access Tokens. Si el servidor empieza a dar errores de autenticación, vuelve al explorador y repite el proceso. Para obtener un Page Access Token permanente, la app necesita pasar App Review en Meta para los permisos `pages_manage_posts` y `pages_show_list`.
 
 ---
 
@@ -111,9 +124,7 @@ python server.py
 
 ---
 
-## Configuración en el cliente MCP
-
-### Claude Desktop
+## Configuración en Claude Desktop
 
 ```json
 {
@@ -130,29 +141,10 @@ python server.py
 
 ## Tokens y renovación
 
-El script guarda un **Page Access Token**, que no caduca mientras la app esté activa y el usuario no revoque el acceso. No es necesaria ninguna renovación periódica.
-
-Si la app pierde acceso (permisos revocados, app suspendida, etc.), vuelve a ejecutar `oauth_setup.py`.
-
----
-
-## Modos de publicación
-
-```
-publish_post(message="Texto del post")
-  → POST /{page-id}/feed   (solo texto)
-
-publish_post(message="...", image_url="https://...")
-  → POST /{page-id}/photos con url   (imagen desde URL pública)
-
-publish_post(message="...", image_path="/ruta/foto.jpg")
-  → POST /{page-id}/photos multipart  (subida binaria directa)
-```
-
-Cuando se proporciona `image_path`, tiene prioridad sobre `image_url`.
+Con un **Page Access Token permanente** (obtenido de una app con App Review aprobado), no necesitas renovar nunca. Con tokens del Graph API Explorer, actualiza `FACEBOOK_ACCESS_TOKEN` en el `.env` cuando caduquen repitiendo el proceso del explorador.
 
 ---
 
 ## Logs
 
-Los errores y eventos se registran en `logs/facebook.log` con rotación automática (5 MB × 3 archivos).
+`logs/facebook.log` — rotación automática (5 MB × 3 archivos).

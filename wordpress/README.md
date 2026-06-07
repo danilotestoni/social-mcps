@@ -1,19 +1,57 @@
 # WordPress MCP
 
-MCP server para publicar automáticamente en un sitio WordPress.com usando la REST API v1.1 con OAuth 2.0. Se integra con cualquier cliente MCP (Claude Desktop, agentes propios, etc.) y expone cuatro herramientas que el agente puede invocar directamente.
+MCP server para publicar automáticamente en un sitio WordPress.com usando la REST API v1.1 con OAuth 2.0. Se integra con cualquier cliente MCP (Claude Desktop, agentes propios, etc.) y expone herramientas que el agente puede invocar directamente.
 
-**Importante:** Este MCP funciona con sitios alojados en **WordPress.com** (el servicio gestionado). No es compatible con instalaciones self-hosted de WordPress.org, que usan una API diferente.
+**Importante:** Este MCP funciona con sitios alojados en **WordPress.com** (el servicio gestionado). No es compatible con instalaciones self-hosted de WordPress.org.
 
-## Qué hace
+---
 
-| Herramienta | Descripción |
+## Herramientas disponibles
+
+| Herramienta | Parámetros | Descripción |
+|---|---|---|
+| `publish_post` | `title` (obligatorio), `content` (obligatorio), `status` (opcional), `image_url` (opcional), `image_path` (opcional) | Crea un post. Si se pasan los dos parámetros de imagen, `image_path` tiene prioridad |
+| `get_last_posts` | `count` (opcional, por defecto 10) | Devuelve los últimos N posts del sitio |
+| `delete_post` | `post_id` (obligatorio, número entero) | Elimina un post por su ID numérico |
+| `get_account_info` | — | Devuelve nombre, URL, descripción y número de posts del sitio |
+
+### Parámetro `status` en `publish_post`
+
+| Valor | Efecto |
 |---|---|
-| `publish_post` | Crea un post en el sitio con título, contenido y estado (publicado, borrador o privado). Admite imagen destacada desde URL pública o archivo local |
-| `get_last_posts` | Devuelve los últimos N posts del sitio |
-| `delete_post` | Elimina un post por su ID numérico |
-| `get_account_info` | Devuelve información del sitio (nombre, URL, descripción, número de posts) |
+| `publish` | Publica el post inmediatamente (valor por defecto) |
+| `draft` | Lo guarda como borrador, no visible públicamente |
+| `private` | Lo publica pero solo visible para administradores |
 
-El MCP recibe el contenido ya formateado. Puedes pasar HTML en el campo `content` o texto plano; WordPress lo renderizará tal cual.
+### Endpoints de la API que usa este MCP
+
+| Operación | Método | Endpoint |
+|---|---|---|
+| Info del sitio | GET | `https://public-api.wordpress.com/rest/v1.1/sites/{site-id}` |
+| Publicar post | POST | `https://public-api.wordpress.com/rest/v1.1/sites/{site-id}/posts/new` |
+| Leer posts | GET | `https://public-api.wordpress.com/rest/v1.1/sites/{site-id}/posts/` |
+| Eliminar post | POST | `https://public-api.wordpress.com/rest/v1.1/sites/{site-id}/posts/{post-id}/delete` |
+| Subir imagen | POST | `https://public-api.wordpress.com/rest/v1.1/sites/{site-id}/media/new` |
+| Listar sitios | GET | `https://public-api.wordpress.com/rest/v1.1/me/sites` |
+| Obtener token | POST | `https://public-api.wordpress.com/oauth2/token` |
+
+> **Nota sobre eliminación:** La API REST de WordPress.com usa `POST /{post-id}/delete` en lugar de `HTTP DELETE` — es una particularidad de su API.
+
+### Publicación con imagen destacada
+
+Cuando se proporciona una imagen, el MCP la sube primero y luego la asigna como `featured_image`:
+
+```
+image_path="C:/fotos/imagen.jpg"
+  → Lee el archivo en binario
+  → POST /sites/{id}/media/new  (subida multipart)
+  → Obtiene el media ID
+  → POST /sites/{id}/posts/new con featured_image=<media_id>
+
+image_url="https://dominio.com/imagen.jpg"
+  → Descarga la imagen
+  → Mismo proceso de subida y asignación
+```
 
 ---
 
@@ -27,38 +65,32 @@ El MCP recibe el contenido ya formateado. Puedes pasar HTML en el campo `content
 
 ## Fase 1 — Crear la app en WordPress.com Developer Portal
 
-Este paso es manual y solo se hace una vez. Es el más sencillo de los cuatro MCPs: sin procesos de revisión, sin restricciones de tipo de cuenta.
+Es el proceso más sencillo de los cuatro MCPs: sin revisión, sin restricciones.
 
 ### 1.1 Crear la aplicación
 
-1. Ve a [developer.wordpress.com/apps](https://developer.wordpress.com/apps) e inicia sesión con tu cuenta WordPress.com.
+1. Ve a [developer.wordpress.com/apps](https://developer.wordpress.com/apps) e inicia sesión.
 2. Haz clic en **Create New Application**.
 3. Rellena los campos:
    - **Name**: el nombre que quieras (p.ej. `social-mcps`)
-   - **Description**: una descripción breve
-   - **Website URL**: la URL de tu sitio, por ejemplo:
+   - **Description**: descripción breve
+   - **Website URL**: la URL de tu sitio
+   - **Redirect URL**: exactamente esta:
      ```
-     https://elsacapuntes.wordpress.com/
+     https://wordpress.com/
      ```
-   - **Redirect URLs**: exactamente esta, o el mismo valor que tengas en `WP_REDIRECT_URI`:
-     ```
-     http://localhost:8765/callback
-     ```
-   - **Javascript Origins**: déjalo vacío
    - **Type**: selecciona **Web**
 4. Haz clic en **Create**.
 
 ### 1.2 Copiar las credenciales
 
-Una vez creada, verás la página de detalle de tu app con:
+En la página de detalle de la app:
 - **Client ID** → `WP_CLIENT_ID`
 - **Client Secret** → `WP_CLIENT_SECRET`
 
-No hay que activar productos adicionales ni solicitar permisos especiales. El scope `global` que usa el script da acceso completo a tu cuenta.
-
 ---
 
-## Fase 2 — Configuración inicial (oauth_setup.py)
+## Fase 2 — Configuración inicial
 
 ```bash
 cd wordpress
@@ -66,29 +98,18 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edita `.env` y rellena `WP_CLIENT_ID` y `WP_CLIENT_SECRET`. Comprueba que
-`WP_REDIRECT_URI` coincide exactamente con la Redirect URL registrada en la app:
-
-```env
-WP_REDIRECT_URI=http://localhost:8765/callback
-```
-
-Deja `WP_ACCESS_TOKEN` y `WP_SITE_ID` vacíos.
-
-Luego ejecuta el asistente de autorización:
+Edita `.env` y rellena `WP_CLIENT_ID` y `WP_CLIENT_SECRET`. Deja `WP_ACCESS_TOKEN` y `WP_SITE_ID` vacíos.
 
 ```bash
 python oauth_setup.py
 ```
 
-El script te guiará para:
-1. Abrir la URL de autorización en el navegador
-2. Aprobar el acceso en WordPress.com
-3. Pegar el código o la URL de redirección (`http://localhost:8765/callback?code=...`)
-4. Listar tus sitios y seleccionar el correcto (si tienes varios)
-5. Escribir el access token y el site ID en `.env`
-
-Al terminar, el `.env` quedará completo con `WP_ACCESS_TOKEN` y `WP_SITE_ID`.
+El script:
+1. Genera la URL de autorización y te la muestra
+2. La abres en el navegador y apruebas el acceso en WordPress.com
+3. WordPress te redirige a `https://wordpress.com/?code=...` — copia esa URL completa
+4. La pegas en la terminal
+5. El script lista tus sitios, seleccionas el correcto, y escribe `WP_ACCESS_TOKEN` y `WP_SITE_ID` en `.env`
 
 ---
 
@@ -100,9 +121,7 @@ python server.py
 
 ---
 
-## Configuración en el cliente MCP
-
-### Claude Desktop
+## Configuración en Claude Desktop
 
 ```json
 {
@@ -119,46 +138,14 @@ python server.py
 
 ## Tokens y renovación
 
-Los tokens de WordPress.com son **permanentes**: no tienen fecha de caducidad y no necesitan renovación periódica. El servidor no necesita ningún mecanismo de refresh.
+Los tokens de WordPress.com son **permanentes**: no caducan y no necesitan renovación. El servidor no tiene mecanismo de refresh porque no hace falta.
 
 Para revocar el acceso manualmente: [wordpress.com/me/security/connected-applications](https://wordpress.com/me/security/connected-applications)
 
-Si revocas el acceso o el token deja de funcionar por cualquier motivo, vuelve a ejecutar `oauth_setup.py` para obtener uno nuevo.
-
----
-
-## Publicación con imagen destacada
-
-Cuando se proporciona una imagen, el MCP la sube primero como media y luego la asigna como `featured_image` del post:
-
-```
-image_path="/ruta/imagen.jpg"
-  → Lee el archivo en binario
-  → POST /sites/{id}/media/new  (subida multipart)
-  → Obtiene el media ID
-  → POST /sites/{id}/posts/new con featured_image=<media_id>
-
-image_url="https://..."
-  → Descarga la imagen
-  → Mismo proceso de subida y asignación
-```
-
-Cuando se proporcionan ambos, `image_path` tiene prioridad sobre `image_url`.
-
----
-
-## Estados de publicación
-
-El parámetro `status` en `publish_post` acepta tres valores:
-
-| Valor | Efecto |
-|---|---|
-| `publish` | Publica el post inmediatamente (por defecto) |
-| `draft` | Lo guarda como borrador, no visible públicamente |
-| `private` | Lo publica pero solo visible para administradores del sitio |
+Si el token deja de funcionar (acceso revocado manualmente), vuelve a ejecutar `oauth_setup.py`.
 
 ---
 
 ## Logs
 
-Los errores y eventos se registran en `logs/wordpress.log` con rotación automática (5 MB × 3 archivos).
+`logs/wordpress.log` — rotación automática (5 MB × 3 archivos).

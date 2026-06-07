@@ -168,7 +168,9 @@ class ThreadsClient:
         """
         container_id = await self._create_container(text, image_url)
         self._logger.debug("Threads container created: %s", container_id)
-        await self._wait_for_container(container_id)
+        # TEXT-only containers are ready immediately; polling is only needed for IMAGE posts
+        if image_url:
+            await self._wait_for_container(container_id)
         thread_id = await self._publish_container(container_id)
         self._logger.info("Thread published successfully: %s", thread_id)
         return thread_id

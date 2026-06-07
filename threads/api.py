@@ -12,13 +12,14 @@ from models import AccountInfo, ThreadItem
 _BASE_URL = "https://graph.threads.net/v1.0"
 _CONTAINER_POLL_INTERVAL = 3   # seconds between status checks
 _CONTAINER_POLL_MAX = 20       # max polling attempts (~60s total)
+_REQUEST_TIMEOUT = 30.0        # seconds — Threads API can be slow on container creation
 
 
 def _retried(func):
     return retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
-        retry=retry_if_exception_type(httpx.HTTPStatusError),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
         reraise=True,
     )(func)
 
@@ -46,7 +47,7 @@ class ThreadsClient:
     @_retried
     async def get_account_info(self) -> AccountInfo:
         token = await self._token()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
             response = await client.get(
                 "/me",
                 params={
@@ -65,7 +66,7 @@ class ThreadsClient:
     @_retried
     async def get_threads(self, count: int = 10) -> list[ThreadItem]:
         token = await self._token()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
             response = await client.get(
                 f"/{self._user_id}/threads",
                 params={
@@ -91,7 +92,7 @@ class ThreadsClient:
     @_retried
     async def delete_thread(self, thread_id: str) -> None:
         token = await self._token()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
             response = await client.delete(
                 f"/{thread_id}",
                 params={"access_token": token},
@@ -110,7 +111,7 @@ class ThreadsClient:
         else:
             params["media_type"] = "TEXT"
 
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
             response = await client.post(
                 f"/{self._user_id}/threads",
                 params=params,
@@ -121,7 +122,7 @@ class ThreadsClient:
     async def _wait_for_container(self, container_id: str) -> None:
         token = await self._token()
         for attempt in range(_CONTAINER_POLL_MAX):
-            async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+            async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
                 response = await client.get(
                     f"/{container_id}",
                     params={"fields": "status,error_type", "access_token": token},
@@ -150,7 +151,7 @@ class ThreadsClient:
     @_retried
     async def _publish_container(self, container_id: str) -> str:
         token = await self._token()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
             response = await client.post(
                 f"/{self._user_id}/threads_publish",
                 params={"creation_id": container_id, "access_token": token},

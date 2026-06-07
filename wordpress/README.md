@@ -36,10 +36,13 @@ Este paso es manual y solo se hace una vez. Es el más sencillo de los cuatro MC
 3. Rellena los campos:
    - **Name**: el nombre que quieras (p.ej. `social-mcps`)
    - **Description**: una descripción breve
-   - **Website URL**: cualquier URL válida (puede ser la de tu sitio)
-   - **Redirect URL**: exactamente esta:
+   - **Website URL**: la URL de tu sitio, por ejemplo:
      ```
-     https://wordpress.com/
+     https://elsacapuntes.wordpress.com/
+     ```
+   - **Redirect URLs**: exactamente esta, o el mismo valor que tengas en `WP_REDIRECT_URI`:
+     ```
+     http://localhost:8765/callback
      ```
    - **Javascript Origins**: déjalo vacío
    - **Type**: selecciona **Web**
@@ -63,7 +66,14 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edita `.env` y rellena `WP_CLIENT_ID` y `WP_CLIENT_SECRET`. Deja el resto vacío.
+Edita `.env` y rellena `WP_CLIENT_ID` y `WP_CLIENT_SECRET`. Comprueba que
+`WP_REDIRECT_URI` coincide exactamente con la Redirect URL registrada en la app:
+
+```env
+WP_REDIRECT_URI=http://localhost:8765/callback
+```
+
+Deja `WP_ACCESS_TOKEN` y `WP_SITE_ID` vacíos.
 
 Luego ejecuta el asistente de autorización:
 
@@ -74,7 +84,7 @@ python oauth_setup.py
 El script te guiará para:
 1. Abrir la URL de autorización en el navegador
 2. Aprobar el acceso en WordPress.com
-3. Pegar el código o la URL de redirección (`https://wordpress.com/?code=...`)
+3. Pegar el código o la URL de redirección (`http://localhost:8765/callback?code=...`)
 4. Listar tus sitios y seleccionar el correcto (si tienes varios)
 5. Escribir el access token y el site ID en `.env`
 

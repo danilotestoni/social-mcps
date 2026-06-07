@@ -16,10 +16,10 @@ _REQUIRED_KEYS = (
     "LINKEDIN_CLIENT_ID",
     "LINKEDIN_CLIENT_SECRET",
     "LINKEDIN_ACCESS_TOKEN",
-    "LINKEDIN_REFRESH_TOKEN",
     "LINKEDIN_TOKEN_EXPIRY",
     "LINKEDIN_PERSON_URN",
 )
+_OPTIONAL_KEYS = ("LINKEDIN_REFRESH_TOKEN",)
 
 
 class AuthError(Exception):
@@ -39,7 +39,7 @@ class TokenManager:
                 f"Missing required .env keys: {', '.join(missing)}. "
                 f"Run oauth_setup.py to initialize credentials."
             )
-        return {k: values[k] for k in _REQUIRED_KEYS}  # type: ignore[return-value]
+        return {k: values[k] for k in _REQUIRED_KEYS} | {k: values.get(k, "") for k in _OPTIONAL_KEYS}  # type: ignore[return-value]
 
     def is_expired(self, expiry: int) -> bool:
         return int(time.time()) >= expiry
@@ -94,10 +94,16 @@ class TokenManager:
         expiry = int(env["LINKEDIN_TOKEN_EXPIRY"])
         self.warn_if_expiring_soon(expiry)
         if self.is_expired(expiry):
+            refresh_token = env.get("LINKEDIN_REFRESH_TOKEN", "")
+            if not refresh_token:
+                raise AuthError(
+                    "LinkedIn access token has expired and no refresh token is available. "
+                    "Run oauth_setup.py to obtain a new access token."
+                )
             token_data = await self.refresh(
                 env["LINKEDIN_CLIENT_ID"],
                 env["LINKEDIN_CLIENT_SECRET"],
-                env["LINKEDIN_REFRESH_TOKEN"],
+                refresh_token,
             )
             self.persist(token_data)
             return token_data.access_token

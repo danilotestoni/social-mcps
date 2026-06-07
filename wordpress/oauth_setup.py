@@ -5,7 +5,7 @@ One-time OAuth 2.0 setup for the WordPress.com REST API.
 Prerequisites:
   - A WordPress.com application registered at https://developer.wordpress.com/apps/
   - WP_CLIENT_ID and WP_CLIENT_SECRET already set in .env.
-  - The app's redirect URL must be set to: https://wordpress.com/
+  - The app's redirect URL must match WP_REDIRECT_URI in .env.
 
 Steps performed:
   1. Build the WordPress.com authorization URL.
@@ -24,16 +24,18 @@ from __future__ import annotations
 
 import sys
 import urllib.parse
+import shutil
 from pathlib import Path
 
 import httpx
 from dotenv import dotenv_values, set_key
 
 _ENV_PATH = Path(__file__).parent / ".env"
+_ENV_EXAMPLE_PATH = Path(__file__).parent / ".env.example"
 _AUTH_URL = "https://public-api.wordpress.com/oauth2/authorize"
 _TOKEN_URL = "https://public-api.wordpress.com/oauth2/token"
 _API_BASE = "https://public-api.wordpress.com/rest/v1.1"
-_REDIRECT_URI = "https://wordpress.com/"
+_DEFAULT_REDIRECT_URI = "http://localhost:8765/callback"
 
 
 def _load_required(key: str) -> str:
@@ -41,15 +43,33 @@ def _load_required(key: str) -> str:
     value = values.get(key, "").strip()
     if not value:
         print(f"ERROR: {key} is missing or empty in {_ENV_PATH}")
+        print("Fill WP_CLIENT_ID and WP_CLIENT_SECRET before running this script.")
         sys.exit(1)
     return value
 
 
-def _build_auth_url(client_id: str) -> str:
+def _load_redirect_uri() -> str:
+    values = dotenv_values(_ENV_PATH)
+    return values.get("WP_REDIRECT_URI", "").strip() or _DEFAULT_REDIRECT_URI
+
+
+def _ensure_env_file() -> None:
+    if _ENV_PATH.exists():
+        return
+
+    if not _ENV_EXAMPLE_PATH.exists():
+        print(f"ERROR: {_ENV_PATH} not found and {_ENV_EXAMPLE_PATH} is missing.")
+        sys.exit(1)
+
+    shutil.copyfile(_ENV_EXAMPLE_PATH, _ENV_PATH)
+    print(f"Created {_ENV_PATH} from {_ENV_EXAMPLE_PATH}.")
+
+
+def _build_auth_url(client_id: str, redirect_uri: str) -> str:
     params = urllib.parse.urlencode(
         {
             "client_id": client_id,
-            "redirect_uri": _REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": "global",
         }
@@ -70,13 +90,15 @@ def _extract_code(raw_input: str) -> str:
     return raw_input
 
 
-def _exchange_code(client_id: str, client_secret: str, code: str) -> str:
+def _exchange_code(
+    client_id: str, client_secret: str, redirect_uri: str, code: str
+) -> str:
     response = httpx.post(
         _TOKEN_URL,
         data={
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uri": _REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "code": code,
             "grant_type": "authorization_code",
         },
@@ -101,20 +123,21 @@ def _get_sites(access_token: str) -> list[dict]:
 
 
 def main() -> None:
-    if not _ENV_PATH.exists():
-        print(f"ERROR: {_ENV_PATH} not found. Copy .env.example to .env first.")
-        sys.exit(1)
+    _ensure_env_file()
 
     client_id = _load_required("WP_CLIENT_ID")
     client_secret = _load_required("WP_CLIENT_SECRET")
+    redirect_uri = _load_redirect_uri()
 
-    auth_url = _build_auth_url(client_id)
+    auth_url = _build_auth_url(client_id, redirect_uri)
     print("\n--- WordPress.com OAuth Setup ---\n")
+    print("Registered redirect URI expected by this script:")
+    print(f"   {redirect_uri}\n")
     print("1. Open this URL in your browser and authorize the application:\n")
     print(f"   {auth_url}\n")
-    print("2. After approving, you will be redirected to wordpress.com")
+    print("2. After approving, you will be redirected to your registered callback URL.")
     print("   The URL will contain a 'code' parameter like:")
-    print("   https://wordpress.com/?code=abc123...\n")
+    print(f"   {redirect_uri}?code=abc123...\n")
 
     raw = input("3. Paste the full redirect URL or just the 'code' value:\n> ").strip()
     if not raw:
@@ -124,7 +147,7 @@ def main() -> None:
     code = _extract_code(raw)
 
     print("\nExchanging code for access token...")
-    access_token = _exchange_code(client_id, client_secret, code)
+    access_token = _exchange_code(client_id, client_secret, redirect_uri, code)
 
     print("Fetching your WordPress.com sites...")
     sites = _get_sites(access_token)

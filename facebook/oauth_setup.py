@@ -6,23 +6,19 @@ Prerequisites:
   - A Facebook App with the Pages API product enabled.
   - A Facebook Page you administer.
   - FACEBOOK_APP_ID and FACEBOOK_APP_SECRET already set in .env.
-
-Steps performed:
-  1. Build the Facebook Login authorization URL.
-  2. User opens URL, approves scopes, gets redirected with a code.
-  3. Exchange code for a short-lived User Access Token.
-  4. Exchange for a Long-lived User Access Token (60 days).
-  5. List administrated Facebook Pages and let user select the correct one.
-  6. Store the Page Access Token (never expires) and Page ID in .env.
+  - In your Facebook App settings, add this redirect URI:
+      http://localhost:8888/callback
 
 Run:
     python oauth_setup.py
 """
 from __future__ import annotations
 
+import http.server
 import sys
-import time
+import threading
 import urllib.parse
+import webbrowser
 from pathlib import Path
 
 import httpx
@@ -32,8 +28,47 @@ _ENV_PATH = Path(__file__).parent / ".env"
 _GRAPH_URL = "https://graph.facebook.com/v21.0"
 _AUTH_URL = "https://www.facebook.com/v21.0/dialog/oauth"
 _TOKEN_URL = f"{_GRAPH_URL}/oauth/access_token"
-_REDIRECT_URI = "https://www.facebook.com/connect/login_success.html"
+_REDIRECT_URI = "http://localhost:8888/callback"
 _SCOPES = "pages_manage_posts,pages_read_engagement,pages_show_list"
+_PORT = 8888
+
+
+class _CallbackHandler(http.server.BaseHTTPRequestHandler):
+    captured_code: str | None = None
+    captured_error: str | None = None
+
+    def do_GET(self) -> None:
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        if "code" in params:
+            _CallbackHandler.captured_code = params["code"][0]
+            body = b"<html><body><h2>Autorizado correctamente. Puedes cerrar esta ventana.</h2></body></html>"
+        else:
+            _CallbackHandler.captured_error = params.get("error_description", ["Error desconocido"])[0]
+            body = b"<html><body><h2>Error de autorizacion. Vuelve a la terminal.</h2></body></html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass  # suppress server request logs
+
+
+def _wait_for_code(auth_url: str) -> str:
+    server = http.server.HTTPServer(("localhost", _PORT), _CallbackHandler)
+    print(f"\nAbriendo el navegador para autorizar la aplicación...")
+    webbrowser.open(auth_url)
+    print("Si el navegador no se abre, copia esta URL manualmente:\n")
+    print(f"  {auth_url}\n")
+    print("Esperando autorización en el navegador...")
+    server.handle_request()
+    if _CallbackHandler.captured_error:
+        print(f"ERROR: {_CallbackHandler.captured_error}")
+        sys.exit(1)
+    if not _CallbackHandler.captured_code:
+        print("ERROR: No se recibió el código de autorización.")
+        sys.exit(1)
+    return _CallbackHandler.captured_code
 
 
 def _load_required(key: str) -> str:
@@ -55,19 +90,6 @@ def _build_auth_url(app_id: str) -> str:
         }
     )
     return f"{_AUTH_URL}?{params}"
-
-
-def _extract_code(raw_input: str) -> str:
-    raw_input = raw_input.strip()
-    if raw_input.startswith("http"):
-        parsed = urllib.parse.urlparse(raw_input)
-        params = urllib.parse.parse_qs(parsed.query)
-        codes = params.get("code", [])
-        if not codes:
-            print("ERROR: No 'code' parameter found in the URL.")
-            sys.exit(1)
-        return codes[0]
-    return raw_input
 
 
 def _exchange_code(app_id: str, app_secret: str, code: str) -> str:
@@ -121,19 +143,9 @@ def main() -> None:
     app_id = _load_required("FACEBOOK_APP_ID")
     app_secret = _load_required("FACEBOOK_APP_SECRET")
 
+    print("\n--- Facebook Pages OAuth Setup ---")
     auth_url = _build_auth_url(app_id)
-    print("\n--- Facebook Pages OAuth Setup ---\n")
-    print("1. Open this URL in your browser and authorize the application:\n")
-    print(f"   {auth_url}\n")
-    print("2. After approving, you will be redirected to a URL like:")
-    print(f"   {_REDIRECT_URI}?code=AQT...#_=_\n")
-
-    raw = input("3. Paste the full redirect URL or just the 'code' value:\n> ").strip()
-    if not raw:
-        print("ERROR: No input provided.")
-        sys.exit(1)
-
-    code = _extract_code(raw)
+    code = _wait_for_code(auth_url)
 
     print("\nExchanging code for short-lived token...")
     short_token = _exchange_code(app_id, app_secret, code)
@@ -144,9 +156,7 @@ def main() -> None:
     print("Fetching your Facebook Pages...")
     pages = _get_pages(long_token)
     if not pages:
-        print(
-            "ERROR: No Facebook Pages found. You must be an admin of at least one Page."
-        )
+        print("ERROR: No Facebook Pages found. You must be an admin of at least one Page.")
         sys.exit(1)
 
     if len(pages) == 1:
@@ -160,11 +170,10 @@ def main() -> None:
         idx = int(choice) - 1 if choice.isdigit() else 0
         page = pages[idx]
 
-    # Page Access Token never expires when generated from a long-lived user token
     page_token = page["access_token"]
 
     set_key(str(_ENV_PATH), "FACEBOOK_ACCESS_TOKEN", page_token)
-    set_key(str(_ENV_PATH), "FACEBOOK_TOKEN_EXPIRY", "0")  # 0 = never expires
+    set_key(str(_ENV_PATH), "FACEBOOK_TOKEN_EXPIRY", "0")
     set_key(str(_ENV_PATH), "FACEBOOK_PAGE_ID", page["id"])
 
     print("\n--- Setup complete ---\n")

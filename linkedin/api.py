@@ -56,9 +56,13 @@ class LinkedInClient:
             response = await client.get("/v2/userinfo", headers=headers)
         self._raise_for_status(response)
         data = response.json()
-        # 'sub' is the full person URN: urn:li:person:xxxx
-        person_urn = data["sub"]
-        person_id = person_urn.split(":")[-1]
+        # LinkedIn returns just the member ID in 'sub', not the full URN
+        person_id = data["sub"]
+        if person_id.startswith("urn:li:person:"):
+            person_urn = person_id
+            person_id = person_id.split(":")[-1]
+        else:
+            person_urn = f"urn:li:person:{person_id}"
         return ProfileInfo(
             id=person_id,
             first_name=data.get("given_name", ""),

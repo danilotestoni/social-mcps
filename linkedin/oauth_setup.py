@@ -90,8 +90,11 @@ def _fetch_person_urn(access_token: str) -> str:
         print(f"ERROR: Could not fetch profile ({response.status_code}):")
         print(response.text)
         sys.exit(1)
-    # 'sub' is the full person URN: urn:li:person:xxxx
-    return response.json()["sub"]
+    # LinkedIn returns just the member ID in 'sub', not the full URN
+    person_id = response.json()["sub"]
+    if not person_id.startswith("urn:li:person:"):
+        person_id = f"urn:li:person:{person_id}"
+    return person_id
 
 
 def main() -> None:

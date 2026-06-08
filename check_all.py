@@ -105,7 +105,7 @@ _PLATFORMS: list[tuple[str, str]] = [
 ]
 
 
-def _check(platform: str, script: str) -> dict:
+def _check_python(platform: str, script: str) -> dict:
     env_path = ROOT / platform / ".env"
     if not env_path.exists():
         return {"success": False, "error": ".env not found — run setup first"}
@@ -132,22 +132,70 @@ def _check(platform: str, script: str) -> dict:
     return {"success": False, "error": last_line}
 
 
+def _check_browser() -> dict[str, dict]:
+    """Runs the Node.js browser health check for X and Facebook personal."""
+    check_js = ROOT / "social-automation-mcp" / "build" / "check.js"
+    if not check_js.exists():
+        return {
+            "x": {"success": False, "error": "build/check.js not found — run: npm run build"},
+            "facebook_personal": {"success": False, "error": "build/check.js not found — run: npm run build"},
+        }
+
+    try:
+        result = subprocess.run(
+            ["node", str(check_js)],
+            cwd=ROOT / "social-automation-mcp",
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        msg = "timeout after 60s"
+        return {"x": {"success": False, "error": msg}, "facebook_personal": {"success": False, "error": msg}}
+    except FileNotFoundError:
+        msg = "node not found in PATH"
+        return {"x": {"success": False, "error": msg}, "facebook_personal": {"success": False, "error": msg}}
+
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            return json.loads(result.stdout.strip())
+        except json.JSONDecodeError:
+            pass
+
+    stderr = result.stderr.strip()
+    last_line = stderr.splitlines()[-1] if stderr else "unknown error"
+    return {
+        "x": {"success": False, "error": last_line},
+        "facebook_personal": {"success": False, "error": last_line},
+    }
+
+
+def _print_result(label: str, result: dict) -> bool:
+    ok = result.get("success", False)
+    icon = "OK  " if ok else "FAIL"
+    print(f"\n[{icon}] {label}")
+    if ok:
+        for k, v in (result.get("data") or {}).items():
+            print(f"      {k}: {v}")
+    else:
+        print(f"      Error: {result.get('error', 'unknown')}")
+    return ok
+
+
 def main() -> None:
     print("\nSocial MCP — Health Check")
     print("=" * 45)
     all_ok = True
+
     for platform, script in _PLATFORMS:
-        result = _check(platform, script)
-        ok = result.get("success", False)
-        if not ok:
+        result = _check_python(platform, script)
+        if not _print_result(platform.upper(), result):
             all_ok = False
-        icon = "OK  " if ok else "FAIL"
-        print(f"\n[{icon}] {platform.upper()}")
-        if ok:
-            for k, v in (result.get("data") or {}).items():
-                print(f"      {k}: {v}")
-        else:
-            print(f"      Error: {result.get('error', 'unknown')}")
+
+    browser_results = _check_browser()
+    for label, result in browser_results.items():
+        if not _print_result(label.upper(), result):
+            all_ok = False
 
     print("\n" + "=" * 45)
     if all_ok:

@@ -29,8 +29,17 @@ const POST_BUTTON_TEXT = /^(post|publicar)$/i;
 
 export async function shareToFbFeed(
   postUrl: string,
-  message?: string
-): Promise<{ success: boolean; error?: string }> {
+  message?: string,
+  dryRun = false
+): Promise<{ success: boolean; dry_run?: boolean; payload?: object; error?: string }> {
+  if (dryRun) {
+    return {
+      success: true,
+      dry_run: true,
+      payload: { post_url: postUrl, message: message ?? null, platform: "facebook_personal" },
+    };
+  }
+
   if (!fs.existsSync(AUTH_FILE)) {
     return {
       success: false,

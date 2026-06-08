@@ -10,7 +10,8 @@
     "setup-x": "ts-node src/setup-x-auth.ts",
     "setup-fb": "ts-node src/setup-fb-auth.ts",
     "import-x-cookies": "ts-node src/import-x-cookies.ts",
-    "test-x": "ts-node test-x.ts"
+    "test-x": "ts-node test-x.ts",
+    "check": "node build/check.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

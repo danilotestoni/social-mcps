@@ -18,9 +18,13 @@ server.tool(
       .min(1)
       .max(280)
       .describe("Texto del tweet (máximo 280 caracteres)"),
+    dry_run: z
+      .boolean()
+      .optional()
+      .describe("Si es true, devuelve el payload sin publicar nada."),
   },
-  async ({ text }) => {
-    const result = await postToX(text);
+  async ({ text, dry_run }) => {
+    const result = await postToX(text, dry_run ?? false);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -40,9 +44,13 @@ server.tool(
       .max(63206)
       .optional()
       .describe("Texto opcional para acompañar el post compartido"),
+    dry_run: z
+      .boolean()
+      .optional()
+      .describe("Si es true, devuelve el payload sin publicar nada."),
   },
-  async ({ post_url, message }) => {
-    const result = await shareToFbFeed(post_url, message);
+  async ({ post_url, message, dry_run }) => {
+    const result = await shareToFbFeed(post_url, message, dry_run ?? false);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };

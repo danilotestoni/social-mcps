@@ -12,11 +12,18 @@ const SELECTORS = {
 
 const TIMEOUT_MS = 30_000;
 
-export async function postToX(text: string): Promise<{
-  success: boolean;
-  url?: string;
-  error?: string;
-}> {
+export async function postToX(
+  text: string,
+  dryRun = false
+): Promise<{ success: boolean; url?: string; dry_run?: boolean; payload?: object; error?: string }> {
+  if (dryRun) {
+    return {
+      success: true,
+      dry_run: true,
+      payload: { text, length: text.length, platform: "x" },
+    };
+  }
+
   if (!fs.existsSync(AUTH_FILE)) {
     return {
       success: false,

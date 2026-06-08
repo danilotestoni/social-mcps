@@ -2,19 +2,11 @@ import { chromium } from "../browser";
 import * as path from "path";
 import * as fs from "fs";
 
-// Persistent profile created by npm run setup-x
-const X_PROFILE_DIR = path.join(__dirname, "..", "..", "auth", "x-profile");
+const AUTH_FILE = path.join(__dirname, "..", "..", "auth", "x-session.json");
 
-// TODO: Update these selectors if X changes its UI — they break occasionally after redesigns.
-// All selectors use data-testid attributes which are more stable than class names.
 const SELECTORS = {
-  // Main tweet compose area visible at the top of the home feed
   composeBox: '[data-testid="tweetTextarea_0"]',
-  // Floating "Post" / "+" button in the left sidebar (opens a dialog compose box)
-  postFab: '[data-testid="SideNav_NewTweet_Button"]',
-  // "Post" submit button inside the compose area
   tweetButton: '[data-testid="tweetButtonInline"]',
-  // Success toast shown after a tweet is published
   successToast: '[data-testid="toast"]',
 };
 
@@ -25,79 +17,96 @@ export async function postToX(text: string): Promise<{
   url?: string;
   error?: string;
 }> {
-  if (!fs.existsSync(X_PROFILE_DIR)) {
+  if (!fs.existsSync(AUTH_FILE)) {
     return {
       success: false,
       error:
-        "No se encontró el perfil de X. Ejecuta 'npm run setup-x' primero para autenticar.",
+        "No se encontró la sesión de X. Ejecuta 'npm run import-x-cookies' o 'npm run setup-x' primero.",
     };
   }
 
-  // Reuse the same persistent profile from setup — already logged in, real browser state.
-  const context = await chromium.launchPersistentContext(X_PROFILE_DIR, {
-    headless: true,
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    storageState: AUTH_FILE,
     viewport: { width: 1280, height: 800 },
     locale: "es-ES",
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--no-first-run",
-      "--no-default-browser-check",
-    ],
   });
-
   const page = await context.newPage();
 
   try {
     page.setDefaultTimeout(TIMEOUT_MS);
 
-    await page.goto("https://x.com/home", {
+    await page.goto("https://x.com/compose/post", {
       waitUntil: "domcontentloaded",
       timeout: TIMEOUT_MS,
     });
 
-    // Detect session expiry
+    await page.waitForTimeout(2000);
+
     const currentUrl = page.url();
     if (currentUrl.includes("/login") || currentUrl.includes("/i/flow")) {
       return {
         success: false,
         error:
-          "La sesión ha expirado. Ejecuta 'npm run setup-x' de nuevo para renovar la autenticación.",
+          "La sesión ha expirado. Ejecuta 'npm run import-x-cookies' de nuevo para renovar la autenticación.",
       };
     }
 
-    // Try to locate the inline compose box at the top of the home feed.
-    // If not immediately visible, click the sidebar "+ Post" FAB to open a dialog.
-    let composeBox = page.locator(SELECTORS.composeBox).first();
-    const isVisible = await composeBox.isVisible().catch(() => false);
+    // compose/post has two tweetTextarea_0 instances: inline home feed + modal dialog.
+    // .last() targets the modal compose box (inside #layers).
+    // The mask overlay in #layers blocks coordinate-based clicks, so we use focus()
+    // which calls JS element.focus() directly — bypasses the overlay entirely.
+    const composeBox = page.locator(SELECTORS.composeBox).last();
+    await composeBox.waitFor({ state: "visible", timeout: TIMEOUT_MS });
+    await composeBox.focus();
 
-    if (!isVisible) {
-      await page.locator(SELECTORS.postFab).click({ timeout: 10_000 });
-      composeBox = page.locator(SELECTORS.composeBox).first();
-    }
+    // Give React time to process the focus event before we start typing
+    await page.waitForTimeout(200);
 
-    // Click the compose area and fill the tweet text.
-    // If X changes its rich-text editor, switch to:
-    //   await composeBox.click(); await page.keyboard.type(text);
-    await composeBox.click({ timeout: 10_000 });
-    await composeBox.fill(text);
+    // keyboard.type() fires individual key events which DraftJS/React picks up.
+    // fill() bypasses synthetic events (Post button stays disabled).
+    await page.keyboard.type(text, { delay: 30 });
 
-    const publishButton = page.locator(SELECTORS.tweetButton).first();
+    const publishButton = page.locator(SELECTORS.tweetButton).last();
     await publishButton.waitFor({ state: "visible", timeout: 10_000 });
-    await publishButton.click();
 
-    let tweetUrl: string | undefined;
-    try {
-      const toast = page.locator(SELECTORS.successToast).first();
-      await toast.waitFor({ state: "visible", timeout: 15_000 });
-
-      const viewLink = toast.locator("a").first();
-      const href = await viewLink.getAttribute("href").catch(() => null);
-      if (href) {
-        tweetUrl = href.startsWith("http") ? href : `https://x.com${href}`;
+    // Poll until React enables the button.
+    // waitForFunction with a string eval is blocked by X's CSP (unsafe-eval).
+    const deadline = Date.now() + 10_000;
+    let buttonEnabled = false;
+    while (Date.now() < deadline) {
+      if (await publishButton.isEnabled()) {
+        buttonEnabled = true;
+        break;
       }
-    } catch {
-      // Toast not found — tweet was probably still published
+      await page.waitForTimeout(200);
     }
+
+    if (!buttonEnabled) {
+      const debugPath = path.join(__dirname, "..", "..", "auth", "debug-no-text.png");
+      await page.screenshot({ path: debugPath });
+      return {
+        success: false,
+        error: `El texto no llegó al cuadro de composición (botón no se habilitó). Screenshot: ${debugPath}`,
+      };
+    }
+
+    // The button is inside the modal inside #layers — evaluate() calls the DOM's
+    // native .click() directly on the element, bypassing any z-index overlap check.
+    await publishButton.evaluate((el) => (el as HTMLElement).click());
+
+    // Wait for the confirmation toast — X always shows it on successful post.
+    // If no toast appears, the tweet was not published.
+    const toast = page.locator(SELECTORS.successToast).first();
+    await toast.waitFor({ state: "visible", timeout: 20_000 });
+
+    const viewLink = toast.locator("a").first();
+    const href = await viewLink.getAttribute("href").catch(() => null);
+    const tweetUrl = href
+      ? href.startsWith("http")
+        ? href
+        : `https://x.com${href}`
+      : undefined;
 
     return { success: true, ...(tweetUrl ? { url: tweetUrl } : {}) };
   } catch (err) {
@@ -108,5 +117,6 @@ export async function postToX(text: string): Promise<{
     };
   } finally {
     await context.close();
+    await browser.close();
   }
 }

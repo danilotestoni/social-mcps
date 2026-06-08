@@ -2,8 +2,8 @@ import { chromium } from "../browser";
 import * as path from "path";
 import * as fs from "fs";
 
-// Path to the saved session file (relative to project root, works for both ts-node and compiled build)
-const AUTH_FILE = path.join(__dirname, "..", "..", "auth", "x-session.json");
+// Persistent profile created by npm run setup-x
+const X_PROFILE_DIR = path.join(__dirname, "..", "..", "auth", "x-profile");
 
 // TODO: Update these selectors if X changes its UI — they break occasionally after redesigns.
 // All selectors use data-testid attributes which are more stable than class names.
@@ -25,16 +25,26 @@ export async function postToX(text: string): Promise<{
   url?: string;
   error?: string;
 }> {
-  if (!fs.existsSync(AUTH_FILE)) {
+  if (!fs.existsSync(X_PROFILE_DIR)) {
     return {
       success: false,
       error:
-        "No se encontró la sesión guardada de X. Ejecuta 'npm run setup-x' primero para autenticar.",
+        "No se encontró el perfil de X. Ejecuta 'npm run setup-x' primero para autenticar.",
     };
   }
 
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ storageState: AUTH_FILE });
+  // Reuse the same persistent profile from setup — already logged in, real browser state.
+  const context = await chromium.launchPersistentContext(X_PROFILE_DIR, {
+    headless: true,
+    viewport: { width: 1280, height: 800 },
+    locale: "es-ES",
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-first-run",
+      "--no-default-browser-check",
+    ],
+  });
+
   const page = await context.newPage();
 
   try {
@@ -45,7 +55,7 @@ export async function postToX(text: string): Promise<{
       timeout: TIMEOUT_MS,
     });
 
-    // Detect session expiry: X redirects to login if the session is invalid
+    // Detect session expiry
     const currentUrl = page.url();
     if (currentUrl.includes("/login") || currentUrl.includes("/i/flow")) {
       return {
@@ -56,44 +66,37 @@ export async function postToX(text: string): Promise<{
     }
 
     // Try to locate the inline compose box at the top of the home feed.
-    // If it is not immediately visible, click the sidebar "+ Post" FAB to open a dialog.
+    // If not immediately visible, click the sidebar "+ Post" FAB to open a dialog.
     let composeBox = page.locator(SELECTORS.composeBox).first();
     const isVisible = await composeBox.isVisible().catch(() => false);
 
     if (!isVisible) {
-      await page
-        .locator(SELECTORS.postFab)
-        .click({ timeout: 10_000 });
+      await page.locator(SELECTORS.postFab).click({ timeout: 10_000 });
       composeBox = page.locator(SELECTORS.composeBox).first();
     }
 
-    // Click the compose area and type the tweet text.
-    // Using fill() which sets the value and fires the input event React listens to.
-    // If X changes its rich-text editor implementation, switch to:
+    // Click the compose area and fill the tweet text.
+    // If X changes its rich-text editor, switch to:
     //   await composeBox.click(); await page.keyboard.type(text);
     await composeBox.click({ timeout: 10_000 });
     await composeBox.fill(text);
 
-    // Wait for the Post button to be enabled (it stays disabled while the box is empty)
     const publishButton = page.locator(SELECTORS.tweetButton).first();
     await publishButton.waitFor({ state: "visible", timeout: 10_000 });
     await publishButton.click();
 
-    // Wait for the success toast; if it doesn't appear within the window it's a soft warning,
-    // not necessarily a failure — X sometimes skips the toast on fast connections.
     let tweetUrl: string | undefined;
     try {
       const toast = page.locator(SELECTORS.successToast).first();
       await toast.waitFor({ state: "visible", timeout: 15_000 });
 
-      // Attempt to extract the "View" link from the toast (gives us the tweet URL)
       const viewLink = toast.locator("a").first();
       const href = await viewLink.getAttribute("href").catch(() => null);
       if (href) {
         tweetUrl = href.startsWith("http") ? href : `https://x.com${href}`;
       }
     } catch {
-      // Toast not found — the tweet was probably still published
+      // Toast not found — tweet was probably still published
     }
 
     return { success: true, ...(tweetUrl ? { url: tweetUrl } : {}) };
@@ -105,6 +108,5 @@ export async function postToX(text: string): Promise<{
     };
   } finally {
     await context.close();
-    await browser.close();
   }
 }

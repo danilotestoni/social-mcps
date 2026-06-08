@@ -1,45 +1,53 @@
 /**
- * One-time setup script: opens a visible Chromium window so you can log in to X manually,
- * then saves the session state to auth/x-session.json for reuse by the post_to_x tool.
+ * One-time setup script: opens a visible Chromium window with a persistent profile
+ * so you can log in to X manually. The session is stored in auth/x-profile/ and
+ * reused by the post_to_x tool on every subsequent run.
  *
  * Run once with:  npm run setup-x
+ * Re-run if X logs you out (roughly every 30 days of inactivity).
  */
 import { chromium } from "./browser";
 import * as path from "path";
 import * as fs from "fs";
 
 const AUTH_DIR = path.join(__dirname, "..", "auth");
-const AUTH_FILE = path.join(AUTH_DIR, "x-session.json");
+// Persistent profile directory — the browser accumulates real state here over time.
+// This is what makes X's bot detector treat it as a real browser.
+const X_PROFILE_DIR = path.join(AUTH_DIR, "x-profile");
 
 async function main(): Promise<void> {
   if (!fs.existsSync(AUTH_DIR)) {
     fs.mkdirSync(AUTH_DIR, { recursive: true });
   }
 
-  console.log("Abriendo Chromium. Inicia sesión en X manualmente en el navegador que aparece...");
-  console.log("El script espera hasta que llegues a x.com/home (timeout: 120s).\n");
+  console.log("Abriendo Chromium con perfil persistente...");
+  console.log("Inicia sesión en X manualmente. El script espera hasta x.com/home (timeout: 120s).\n");
 
-  const browser = await chromium.launch({
+  // launchPersistentContext keeps a real browser profile on disk.
+  // Unlike newContext({ storageState }), this profile accumulates history,
+  // cache, IndexedDB and other signals that castle.js uses to verify legitimacy.
+  const context = await chromium.launchPersistentContext(X_PROFILE_DIR, {
     headless: false,
-    slowMo: 50, // small delay so interactions feel natural
+    slowMo: 50,
+    viewport: { width: 1280, height: 800 },
+    locale: "es-ES",
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-first-run",
+      "--no-default-browser-check",
+    ],
   });
-  const context = await browser.newContext();
-  const page = await context.newPage();
 
+  const page = await context.newPage();
   await page.goto("https://x.com/login");
 
-  // Wait until the URL changes to the home page after successful login
   await page.waitForURL("**/home", { timeout: 120_000 });
-
-  // Let the page settle so all cookies and storage are written
   await page.waitForLoadState("networkidle").catch(() => {});
 
-  await context.storageState({ path: AUTH_FILE });
+  await context.close();
 
-  console.log(`\n✅ Sesión guardada en ${AUTH_FILE}`);
+  console.log(`\n✅ Perfil guardado en ${X_PROFILE_DIR}`);
   console.log("Ya puedes usar la tool post_to_x desde Claude.\n");
-
-  await browser.close();
 }
 
 main().catch((err: unknown) => {

@@ -16,8 +16,20 @@ async def publish_post(
     status: str = "publish",
     image_url: str | None = None,
     image_path: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     try:
+        if dry_run:
+            return ToolResult(success=True, data={
+                "dry_run": True,
+                "platform": "wordpress",
+                "payload": {
+                    "title": title,
+                    "content_length": len(content),
+                    "status": status,
+                    "featured_image": image_path or image_url,
+                },
+            }).model_dump()
         featured_media_id: int | None = None
         if image_path:
             featured_media_id = await client.upload_media_from_path(image_path)

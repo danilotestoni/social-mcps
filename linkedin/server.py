@@ -39,6 +39,7 @@ async def publish_post(
     text: str,
     image_url: str | None = None,
     image_path: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """
     Publish a post to LinkedIn.
@@ -48,6 +49,7 @@ async def publish_post(
         image_url: Optional public URL of an image to attach.
         image_path: Optional local file path of an image to upload and attach.
                     Takes priority over image_url when both are provided.
+        dry_run: If True, validates and returns the payload without publishing.
     """
     ctx = mcp.get_context()
     return await tool_handlers.publish_post(
@@ -56,6 +58,7 @@ async def publish_post(
         text,
         image_url,
         image_path,
+        dry_run,
     )
 
 

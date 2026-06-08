@@ -33,6 +33,7 @@ mcp = FastMCP("threads", lifespan=lifespan)
 async def publish_post(
     text: str,
     image_url: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """
     Publish a post to Threads.
@@ -40,12 +41,14 @@ async def publish_post(
     Args:
         text: The post text content (required).
         image_url: Optional public URL of an image to attach (JPEG recommended).
+        dry_run: If True, validates and returns the payload without publishing.
     """
     ctx = mcp.get_context()
     return await tool_handlers.publish_post(
         ctx.request_context.lifespan_context["client"],
         text,
         image_url,
+        dry_run,
     )
 
 

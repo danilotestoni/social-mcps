@@ -13,8 +13,19 @@ async def publish_post(
     client: ThreadsClient,
     text: str,
     image_url: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     try:
+        if dry_run:
+            return ToolResult(success=True, data={
+                "dry_run": True,
+                "platform": "threads",
+                "payload": {
+                    "text": text,
+                    "image_url": image_url,
+                    "media_type": "IMAGE" if image_url else "TEXT",
+                },
+            }).model_dump()
         thread_id = await client.publish_thread(text, image_url)
         return ToolResult(success=True, data={"thread_id": thread_id}).model_dump()
     except httpx.HTTPStatusError as exc:

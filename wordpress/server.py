@@ -36,6 +36,7 @@ async def publish_post(
     status: str = "publish",
     image_url: str | None = None,
     image_path: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """
     Create a post on the WordPress.com site.
@@ -47,6 +48,7 @@ async def publish_post(
         image_url: Optional public URL of an image to set as the featured image.
         image_path: Optional local file path of an image to upload as the featured image.
                     Takes priority over image_url when both are provided.
+        dry_run: If True, validates and returns the payload without publishing.
     """
     ctx = mcp.get_context()
     return await tool_handlers.publish_post(
@@ -56,6 +58,7 @@ async def publish_post(
         status,
         image_url,
         image_path,
+        dry_run,
     )
 
 

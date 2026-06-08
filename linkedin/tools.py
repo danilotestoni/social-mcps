@@ -39,8 +39,19 @@ async def publish_post(
     text: str,
     image_url: str | None = None,
     image_path: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     try:
+        if dry_run:
+            return ToolResult(success=True, data={
+                "dry_run": True,
+                "platform": "linkedin",
+                "payload": {
+                    "person_urn": person_urn,
+                    "text": text,
+                    "image": image_path or image_url,
+                },
+            }).model_dump()
         asset_urn = await _resolve_image(client, person_urn, image_url, image_path)
         post_urn = await client.create_post(person_urn, text, asset_urn)
         return ToolResult(success=True, data={"post_urn": post_urn}).model_dump()

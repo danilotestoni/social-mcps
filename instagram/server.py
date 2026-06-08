@@ -34,6 +34,7 @@ async def publish_post(
     caption: str,
     image_url: str | None = None,
     image_path: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """
     Publish a photo post to Instagram.
@@ -43,6 +44,7 @@ async def publish_post(
         image_url: Public URL of the image to post. Required unless image_path is given.
         image_path: Local file path — note: Instagram Graph API requires a public URL,
                     so this will return an error. Use image_url instead.
+        dry_run: If True, validates and returns the payload without publishing.
     """
     ctx = mcp.get_context()
     return await tool_handlers.publish_post(
@@ -50,6 +52,7 @@ async def publish_post(
         caption,
         image_url,
         image_path,
+        dry_run,
     )
 
 

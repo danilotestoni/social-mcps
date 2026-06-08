@@ -20,6 +20,7 @@ async def publish_post(
     caption: str,
     image_url: str | None = None,
     image_path: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     if image_path:
         return ToolResult(success=False, error=_LOCAL_FILE_ERROR).model_dump()
@@ -28,6 +29,16 @@ async def publish_post(
             success=False,
             error="Instagram requires an image. Provide image_url with a public URL.",
         ).model_dump()
+    if dry_run:
+        return ToolResult(success=True, data={
+            "dry_run": True,
+            "platform": "instagram",
+            "payload": {
+                "caption": caption,
+                "image_url": image_url,
+                "media_type": "IMAGE",
+            },
+        }).model_dump()
     try:
         media_id = await client.publish_photo(image_url, caption)
         return ToolResult(success=True, data={"media_id": media_id}).model_dump()

@@ -14,8 +14,22 @@ async def publish_post(
     message: str,
     image_url: str | None = None,
     image_path: str | None = None,
+    dry_run: bool = False,
 ) -> dict:
     try:
+        if dry_run:
+            if image_path:
+                mode, payload = "photo_file", {"message": message, "image_path": image_path}
+            elif image_url:
+                mode, payload = "photo_url", {"message": message, "image_url": image_url}
+            else:
+                mode, payload = "text", {"message": message}
+            return ToolResult(success=True, data={
+                "dry_run": True,
+                "platform": "facebook",
+                "mode": mode,
+                "payload": payload,
+            }).model_dump()
         if image_path:
             post_id = await client.publish_photo_file(image_path, message)
         elif image_url:

@@ -4,7 +4,7 @@ import mimetypes
 from pathlib import Path
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from auth import TokenManager
 from logger import get_logger
@@ -13,11 +13,30 @@ from models import PageInfo, PostItem
 _BASE_URL = "https://graph.facebook.com/v21.0"
 
 
+def _is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError))
+
+
+def _is_connection_only(exc: BaseException) -> bool:
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+
+
 def _retried(func):
     return retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
-        retry=retry_if_exception_type(httpx.HTTPStatusError),
+        retry=retry_if_exception(_is_transient),
+        reraise=True,
+    )(func)
+
+
+def _retried_publish(func):
+    return retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        retry=retry_if_exception(_is_connection_only),
         reraise=True,
     )(func)
 
@@ -95,7 +114,7 @@ class FacebookClient:
             )
         self._raise_for_status(response)
 
-    @_retried
+    @_retried_publish
     async def publish_text_post(self, message: str) -> str:
         token = await self._token()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
@@ -107,7 +126,7 @@ class FacebookClient:
         self._raise_for_status(response)
         return response.json()["id"]
 
-    @_retried
+    @_retried_publish
     async def publish_photo_url(self, image_url: str, caption: str) -> str:
         token = await self._token()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
@@ -120,7 +139,7 @@ class FacebookClient:
         data = response.json()
         return data.get("post_id") or data["id"]
 
-    @_retried
+    @_retried_publish
     async def publish_photo_file(self, image_path: str, caption: str) -> str:
         token = await self._token()
         image_bytes = Path(image_path).read_bytes()

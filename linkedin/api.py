@@ -17,7 +17,7 @@ _API_VERSION = "202401"
 def _is_transient(exc: BaseException) -> bool:
     """Retry on 5xx responses and low-level network errors. Never retry 4xx."""
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
     return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError))
 
 

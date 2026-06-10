@@ -17,7 +17,7 @@ _REQUEST_TIMEOUT = 30.0        # seconds — Threads API can be slow on containe
 
 def _is_transient(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
     return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError, httpx.TimeoutException))
 
 

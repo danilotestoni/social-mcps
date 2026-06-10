@@ -16,7 +16,7 @@ _CONTAINER_POLL_MAX = 20       # max polling attempts (~60s total)
 
 def _is_transient(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
     return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError))
 
 

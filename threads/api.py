@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from auth import TokenManager
 from logger import get_logger
@@ -15,11 +15,30 @@ _CONTAINER_POLL_MAX = 20       # max polling attempts (~60s total)
 _REQUEST_TIMEOUT = 30.0        # seconds — Threads API can be slow on container creation
 
 
+def _is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError, httpx.TimeoutException))
+
+
+def _is_connection_only(exc: BaseException) -> bool:
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+
+
 def _retried(func):
     return retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
-        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
+        retry=retry_if_exception(_is_transient),
+        reraise=True,
+    )(func)
+
+
+def _retried_publish(func):
+    return retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        retry=retry_if_exception(_is_connection_only),
         reraise=True,
     )(func)
 
@@ -148,7 +167,7 @@ class ThreadsClient:
             f"{_CONTAINER_POLL_MAX} attempts."
         )
 
-    @_retried
+    @_retried_publish
     async def _publish_container(self, container_id: str) -> str:
         token = await self._token()
         async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:

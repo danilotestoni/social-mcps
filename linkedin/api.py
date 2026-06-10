@@ -4,7 +4,7 @@ import urllib.parse
 from pathlib import Path
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from auth import TokenManager
 from logger import get_logger
@@ -14,11 +14,32 @@ _BASE_URL = "https://api.linkedin.com"
 _API_VERSION = "202401"
 
 
+def _is_transient(exc: BaseException) -> bool:
+    """Retry on 5xx responses and low-level network errors. Never retry 4xx."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError))
+
+
+def _is_connection_only(exc: BaseException) -> bool:
+    """Only retry if the request never reached the server (safe for non-idempotent writes)."""
+    return isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+
+
 def _retried(func):
     return retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
-        retry=retry_if_exception_type(httpx.HTTPStatusError),
+        retry=retry_if_exception(_is_transient),
+        reraise=True,
+    )(func)
+
+
+def _retried_publish(func):
+    return retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        retry=retry_if_exception(_is_connection_only),
         reraise=True,
     )(func)
 
@@ -155,7 +176,7 @@ class LinkedInClient:
             )
         self._raise_for_status(response)
 
-    @_retried
+    @_retried_publish
     async def create_post(
         self,
         person_urn: str,

@@ -123,20 +123,20 @@ python server.py
 
 ## Configuración en Claude Desktop
 
-El modo de uso recomendado es a través del **servidor unificado** (`unified-mcp/`), que agrupa todas las plataformas en un único entry point:
+El modo de uso recomendado es a través del **servidor principal** (`Social-MCP/`), que agrupa todas las plataformas en un único entry point:
 
 ```json
 {
   "mcpServers": {
     "social-mcp": {
       "command": "python",
-      "args": ["/ruta/absoluta/social-mcps/unified-mcp/server.py"]
+      "args": ["/ruta/absoluta/social-mcps/Social-MCP/server.py"]
     }
   }
 }
 ```
 
-Con el servidor unificado, las herramientas de WordPress aparecen como `wordpress_publish_post`, `wordpress_get_last_posts`, etc.
+Con el servidor principal, las herramientas de WordPress aparecen como `wordpress_publish_post`, `wordpress_get_last_posts`, etc.
 
 **Uso standalone (solo WordPress):** si prefieres arrancar únicamente este servidor de forma independiente:
 

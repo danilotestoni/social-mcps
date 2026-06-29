@@ -105,20 +105,20 @@ python server.py
 
 ## Configuración en Claude Desktop
 
-El modo de uso recomendado es a través del **servidor unificado** (`unified-mcp/`), que agrupa todas las plataformas en un único entry point:
+El modo de uso recomendado es a través del **servidor principal** (`Social-MCP/`), que agrupa todas las plataformas en un único entry point:
 
 ```json
 {
   "mcpServers": {
     "social-mcp": {
       "command": "python",
-      "args": ["/ruta/absoluta/social-mcps/unified-mcp/server.py"]
+      "args": ["/ruta/absoluta/social-mcps/Social-MCP/server.py"]
     }
   }
 }
 ```
 
-Con el servidor unificado, las herramientas de Facebook aparecen como `facebook_publish_post`, `facebook_get_last_posts`, etc.
+Con el servidor principal, las herramientas de Facebook aparecen como `facebook_publish_post`, `facebook_get_last_posts`, etc.
 
 > **Nota:** Este MCP publica en una **Facebook Page** via API REST. Para compartir en el **feed personal** de Facebook necesitas `social-automation-mcp` (Playwright). No existe API REST para esa acción.
 

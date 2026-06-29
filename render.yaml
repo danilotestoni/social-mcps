@@ -1,0 +1,69 @@
+services:
+  - type: web
+    name: social-unified-mcp
+    runtime: python
+    rootDir: unified-mcp
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    plan: free
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: LINKEDIN_CLIENT_ID
+        sync: false
+      - key: LINKEDIN_CLIENT_SECRET
+        sync: false
+      - key: LINKEDIN_ACCESS_TOKEN
+        sync: false
+      - key: LINKEDIN_REFRESH_TOKEN
+        sync: false
+      - key: LINKEDIN_TOKEN_EXPIRY
+        sync: false
+      - key: LINKEDIN_PERSON_URN
+        sync: false
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: FACEBOOK_ACCESS_TOKEN
+        sync: false
+      - key: FACEBOOK_TOKEN_EXPIRY
+        sync: false
+      - key: FACEBOOK_PAGE_ID
+        sync: false
+      - key: INSTAGRAM_APP_ID
+        sync: false
+      - key: INSTAGRAM_APP_SECRET
+        sync: false
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false
+      - key: INSTAGRAM_TOKEN_EXPIRY
+        sync: false
+      - key: INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: THREADS_APP_ID
+        sync: false
+      - key: THREADS_APP_SECRET
+        sync: false
+      - key: THREADS_ACCESS_TOKEN
+        sync: false
+      - key: THREADS_TOKEN_EXPIRY
+        sync: false
+      - key: THREADS_USER_ID
+        sync: false
+      - key: WP_CLIENT_ID
+        sync: false
+      - key: WP_CLIENT_SECRET
+        sync: false
+      - key: WP_ACCESS_TOKEN
+        sync: false
+      - key: WP_SITE_ID
+        sync: false
+      - key: X_USERNAME
+        sync: false
+      - key: X_PASSWORD
+        sync: false
+      - key: X_EMAIL
+        sync: false
+      - key: NOTIFY_WEBHOOK_URL
+        sync: false

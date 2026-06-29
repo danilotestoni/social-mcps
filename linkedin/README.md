@@ -119,8 +119,22 @@ python server.py
 
 ## Configuración en Claude Desktop
 
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+El modo de uso recomendado es a través del **servidor unificado** (`unified-mcp/`), que agrupa todas las plataformas en un único entry point:
+
+```json
+{
+  "mcpServers": {
+    "social-mcp": {
+      "command": "python",
+      "args": ["/ruta/absoluta/social-mcps/unified-mcp/server.py"]
+    }
+  }
+}
+```
+
+Con el servidor unificado, las herramientas de LinkedIn aparecen como `linkedin_publish_post`, `linkedin_get_last_posts`, etc.
+
+**Uso standalone (solo LinkedIn):** si prefieres arrancar únicamente este servidor de forma independiente:
 
 ```json
 {
@@ -133,7 +147,7 @@ python server.py
 }
 ```
 
-En Windows usa barras invertidas dobles o barras normales:
+En Windows usa barras normales o barras invertidas dobles:
 ```json
 "args": ["C:/Users/TuUsuario/social-mcps/linkedin/server.py"]
 ```

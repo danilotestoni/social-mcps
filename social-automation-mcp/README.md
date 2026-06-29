@@ -1,29 +1,39 @@
 # social-automation-mcp
 
-MCP server for social media automation via browser automation (Playwright + Stealth). Publishes and shares content without needing official API access.
+MCP server de automatización local mediante Playwright + Stealth. Proporciona las herramientas que **no tienen alternativa vía API REST**:
+
+- **`post_to_x`** — Publica un tweet en X (Twitter) usando Chromium. Actúa como fallback cuando Twikit (el cliente ligero del servidor unificado) falla.
+- **`share_to_fb_feed`** — Comparte un post de una Facebook Page en el feed personal. No existe ninguna API REST para esta acción — Playwright es la única opción.
+
+> **Este servidor es solo local.** Chromium requiere ~826 MB de RAM, incompatible con el plan gratuito de Render (512 MB). El servidor unificado (`unified-mcp/`) cubre X via Twikit; cuando Twikit falla o cuando se necesita compartir en Facebook personal, el agente te notifica para que lo ejecutes desde aquí.
 
 ---
 
-## Tools available
+## Herramientas disponibles
 
-| Tool | Description |
-|---|---|
-| `post_to_x` | Publishes a tweet on X (Twitter) |
-| `share_to_fb_feed` | Shares a Facebook page post to your personal feed |
+| Herramienta | Parámetros | Descripción |
+|---|---|---|
+| `post_to_x` | `text` (obligatorio, máx. 280 chars), `dry_run` (opcional) | Publica un tweet usando Chromium con sesión guardada |
+| `share_to_fb_feed` | `post_url` (obligatorio), `message` (opcional), `dry_run` (opcional) | Comparte un post de una Page en tu feed personal de Facebook |
 
 ---
 
-## Installation
+## Instalación
 
 ```bash
 cd social-automation-mcp
 npm install
-npx playwright install chromium
+npm run build
 ```
+
+> **No ejecutes** `npx playwright install`. Playwright ya está configurado con Chromium del sistema en el entorno de desarrollo. En local, sí necesitas instalarlo:
+> ```bash
+> npx playwright install chromium
+> ```
 
 ---
 
-## Setup inicial (solo una vez por plataforma)
+## Setup inicial (una vez por plataforma)
 
 ### X (Twitter)
 
@@ -32,8 +42,14 @@ npm run setup-x
 ```
 
 1. Se abre Chromium. Inicia sesión manualmente en X.
-2. Al llegar a x.com/home, el script guarda la sesión y cierra.
+2. Al llegar a `x.com/home`, el script guarda la sesión y cierra.
 3. Sesión guardada en `auth/x-session.json`.
+
+También puedes importar cookies existentes si ya tienes una sesión exportada:
+
+```bash
+npm run import-x-cookies
+```
 
 ### Facebook (cuenta personal)
 
@@ -45,7 +61,48 @@ npm run setup-fb
 2. Al salir del flujo de login, el script guarda la sesión y cierra.
 3. Sesión guardada en `auth/fb-session.json`.
 
-> Los archivos de sesión contienen cookies. Están en `auth/` que está en `.gitignore` — nunca se suben al repositorio.
+> Las sesiones contienen cookies. La carpeta `auth/` está en `.gitignore` — nunca se sube al repositorio.
+
+---
+
+## Configuración en Claude Desktop
+
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "social-automation": {
+      "command": "node",
+      "args": ["/ruta/absoluta/social-mcps/social-automation-mcp/build/index.js"]
+    }
+  }
+}
+```
+
+En Windows:
+```json
+"args": ["C:/Users/TuUsuario/social-mcps/social-automation-mcp/build/index.js"]
+```
+
+Ejecuta `npm run build` antes de reiniciar Claude Desktop si hiciste cambios.
+
+Si también tienes el servidor unificado, añade ambos:
+```json
+{
+  "mcpServers": {
+    "social-mcp": {
+      "command": "python",
+      "args": ["/ruta/absoluta/social-mcps/unified-mcp/server.py"]
+    },
+    "social-automation": {
+      "command": "node",
+      "args": ["/ruta/absoluta/social-mcps/social-automation-mcp/build/index.js"]
+    }
+  }
+}
+```
 
 ---
 
@@ -57,69 +114,53 @@ npm run setup-fb
 **Compartir post de la página en el feed personal:**
 > "Comparte este post de Facebook en mi feed personal: https://www.facebook.com/elsacapuntes/posts/123..."
 
-Puedes combinar ambas cosas en una sola instrucción:
+Puedes combinar ambas:
 > "Publica el último post de elsacapuntes en X y compártelo en tu feed personal de Facebook."
 
 ---
 
 ## Sobre la detección de bots
 
-Todos los navegadores que lanza este servidor usan `puppeteer-extra-plugin-stealth`, que parchea los indicadores que usan X y Facebook para detectar Playwright:
+Todos los navegadores lanzados por este servidor usan `puppeteer-extra-plugin-stealth`, que normaliza los indicadores que X y Facebook usan para detectar Playwright:
 
 - `navigator.webdriver` → oculto
 - Propiedades del runtime de Chrome → normalizadas
 - User-agent → realista
 - Plugins y APIs del navegador → con valores reales
 
-Si alguna plataforma empieza a bloquear de nuevo, revisa si hay una versión más nueva de `puppeteer-extra-plugin-stealth`.
+Si una plataforma empieza a bloquear sesiones, revisa si hay una versión más nueva de `puppeteer-extra-plugin-stealth`.
 
 ---
 
-## Build and run
+## Comandos disponibles
 
 ```bash
-npm run build    # compilar TypeScript
-npm start        # iniciar el servidor compilado
-npm run dev      # dev mode (ts-node, sin compilar)
+npm run build           # Compilar TypeScript → build/
+npm start               # Iniciar el servidor compilado
+npm run dev             # Modo dev (ts-node, sin compilar)
+npm run setup-x         # Setup interactivo de sesión de X
+npm run setup-fb        # Setup interactivo de sesión de Facebook
+npm run import-x-cookies  # Importar cookies de X desde archivo externo
 ```
 
 ---
 
-## Register in Claude Desktop
-
-**Windows** — `%APPDATA%\Claude\claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "social-automation": {
-      "command": "node",
-      "args": ["D:/DANILO/Documents/PROYECTOS/PERSONALES/PYTHON/social-mcps/social-automation-mcp/build/index.js"]
-    }
-  }
-}
-```
-
-Run `npm run build` before restarting Claude Desktop.
-
----
-
-## Project structure
+## Estructura del proyecto
 
 ```
 social-automation-mcp/
 ├── src/
-│   ├── index.ts                ← MCP server entry point, tool registration
-│   ├── browser.ts              ← shared stealth Chromium instance
-│   ├── setup-x-auth.ts         ← one-time X login script
-│   ├── setup-fb-auth.ts        ← one-time Facebook login script
+│   ├── index.ts                ← Entry point MCP, registro de herramientas
+│   ├── browser.ts              ← Instancia de Chromium compartida (stealth)
+│   ├── setup-x-auth.ts         ← Script de login inicial en X
+│   ├── setup-fb-auth.ts        ← Script de login inicial en Facebook
 │   └── tools/
-│       ├── post-to-x.ts        ← post_to_x implementation
-│       └── share-to-fb-feed.ts ← share_to_fb_feed implementation
-├── auth/                       ← session files (gitignored)
-│   ├── x-session.json          ← created by npm run setup-x
-│   └── fb-session.json         ← created by npm run setup-fb
-├── build/                      ← compiled output (gitignored)
+│       ├── post-to-x.ts        ← Implementación de post_to_x
+│       └── share-to-fb-feed.ts ← Implementación de share_to_fb_feed
+├── auth/                       ← Archivos de sesión (gitignored)
+│   ├── x-session.json          ← Creado por npm run setup-x
+│   └── fb-session.json         ← Creado por npm run setup-fb
+├── build/                      ← Output compilado (gitignored)
 ├── package.json
 ├── tsconfig.json
 └── .gitignore
@@ -127,10 +168,11 @@ social-automation-mcp/
 
 ---
 
-## Nota sobre selectores
+## Mantenimiento de selectores
 
-Facebook y X cambian su UI con frecuencia. Los selectores están en:
-- `src/tools/post-to-x.ts` — constante `SELECTORS` al inicio del archivo
-- `src/tools/share-to-fb-feed.ts` — constante `SELECTORS` al inicio del archivo
+X y Facebook cambian su UI con frecuencia. Los selectores están definidos en la constante `SELECTORS` al inicio de cada archivo de herramienta:
 
-Si una tool empieza a fallar con errores de timeout, busca el comentario `TODO: Update these selectors` en el archivo correspondiente y actualiza los valores con las DevTools del navegador.
+- `src/tools/post-to-x.ts`
+- `src/tools/share-to-fb-feed.ts`
+
+Si una herramienta empieza a fallar con errores de timeout, actualiza los selectores usando las DevTools del navegador.

@@ -50,6 +50,12 @@ class FacebookClient:
     async def _token(self) -> str:
         return await self._tm.get_valid_token()
 
+    async def _auth_headers(self) -> dict[str, str]:
+        # Token goes in the Authorization header (officially supported by the
+        # Graph API) instead of the query string, so it never appears in URLs,
+        # error messages, or logs.
+        return {"Authorization": f"Bearer {await self._token()}"}
+
     def _raise_for_status(self, response: httpx.Response) -> None:
         if response.status_code >= 400:
             self._logger.error(
@@ -59,14 +65,12 @@ class FacebookClient:
 
     @_retried
     async def get_page_info(self) -> PageInfo:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.get(
                 f"/{self._page_id}",
-                params={
-                    "fields": "id,name,category,fan_count,followers_count",
-                    "access_token": token,
-                },
+                params={"fields": "id,name,category,fan_count,followers_count"},
+                headers=headers,
             )
         self._raise_for_status(response)
         data = response.json()
@@ -80,15 +84,15 @@ class FacebookClient:
 
     @_retried
     async def get_posts(self, count: int = 10) -> list[PostItem]:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.get(
                 f"/{self._page_id}/posts",
                 params={
                     "fields": "id,message,created_time,full_picture,permalink_url",
                     "limit": count,
-                    "access_token": token,
                 },
+                headers=headers,
             )
         self._raise_for_status(response)
         posts = []
@@ -106,34 +110,31 @@ class FacebookClient:
 
     @_retried
     async def delete_post(self, post_id: str) -> None:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
-            response = await client.delete(
-                f"/{post_id}",
-                params={"access_token": token},
-            )
+            response = await client.delete(f"/{post_id}", headers=headers)
         self._raise_for_status(response)
 
     @_retried_publish
     async def publish_text_post(self, message: str) -> str:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.post(
                 f"/{self._page_id}/feed",
-                params={"access_token": token},
                 json={"message": message},
+                headers=headers,
             )
         self._raise_for_status(response)
         return response.json()["id"]
 
     @_retried_publish
     async def publish_photo_url(self, image_url: str, caption: str) -> str:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.post(
                 f"/{self._page_id}/photos",
-                params={"access_token": token},
                 json={"url": image_url, "caption": caption},
+                headers=headers,
             )
         self._raise_for_status(response)
         data = response.json()
@@ -141,16 +142,16 @@ class FacebookClient:
 
     @_retried_publish
     async def publish_photo_file(self, image_path: str, caption: str) -> str:
-        token = await self._token()
+        headers = await self._auth_headers()
         image_bytes = Path(image_path).read_bytes()
         filename = Path(image_path).name
         content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.post(
                 f"/{self._page_id}/photos",
-                params={"access_token": token},
                 data={"caption": caption},
                 files={"source": (filename, image_bytes, content_type)},
+                headers=headers,
             )
         self._raise_for_status(response)
         data = response.json()

@@ -32,7 +32,7 @@ class TokenManager:
 
     def load(self) -> dict[str, str]:
         values = dotenv_values(self._env_path)
-        missing = [k for k in _REQUIRED_KEYS if not values.get(k, "").strip()]
+        missing = [k for k in _REQUIRED_KEYS if not (values.get(k) or "").strip()]
         if missing:
             raise AuthError(
                 f"Missing required .env keys: {', '.join(missing)}. "
@@ -47,6 +47,12 @@ class TokenManager:
         if self._never_expires(expiry):
             return False
         return int(time.time()) >= expiry
+
+    def expiring_soon(self, expiry: int) -> bool:
+        if self._never_expires(expiry):
+            return False
+        seconds_remaining = expiry - int(time.time())
+        return 0 < seconds_remaining < _WARNING_WINDOW
 
     def warn_if_expiring_soon(self, expiry: int) -> None:
         if self._never_expires(expiry):
@@ -94,13 +100,26 @@ class TokenManager:
     async def get_valid_token(self) -> str:
         env = self.load()
         expiry = int(env["FACEBOOK_TOKEN_EXPIRY"])
-        self.warn_if_expiring_soon(expiry)
         if self.is_expired(expiry):
-            token_data = await self.refresh(
-                env["FACEBOOK_APP_ID"],
-                env["FACEBOOK_APP_SECRET"],
-                env["FACEBOOK_ACCESS_TOKEN"],
+            # fb_exchange_token requires a still-valid token, so once expired
+            # the refresh is guaranteed to fail — surface a clear error instead.
+            raise AuthError(
+                "Facebook access token has expired and can no longer be refreshed "
+                "automatically. Generate a new token via Graph API Explorer and "
+                "update FACEBOOK_ACCESS_TOKEN / FACEBOOK_TOKEN_EXPIRY."
             )
-            self.persist(token_data)
-            return token_data.access_token
+        if self.expiring_soon(expiry):
+            try:
+                token_data = await self.refresh(
+                    env["FACEBOOK_APP_ID"],
+                    env["FACEBOOK_APP_SECRET"],
+                    env["FACEBOOK_ACCESS_TOKEN"],
+                )
+                self.persist(token_data)
+                return token_data.access_token
+            except Exception as exc:
+                self._logger.warning(
+                    "Proactive Facebook token refresh failed (%s); "
+                    "current token is still valid, continuing with it.", exc
+                )
         return env["FACEBOOK_ACCESS_TOKEN"]

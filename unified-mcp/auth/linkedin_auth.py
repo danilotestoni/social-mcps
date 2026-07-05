@@ -4,8 +4,8 @@ import time
 from pathlib import Path
 
 import httpx
-from dotenv import dotenv_values, set_key
 
+from core.config import env_values, persist_value
 from core.logger import get_logger
 from core.models import LinkedInTokenData
 
@@ -32,12 +32,12 @@ class LinkedInTokenManager:
         self._logger = get_logger(__name__)
 
     def load(self) -> dict[str, str]:
-        values = dotenv_values(self._env_path)
+        values = env_values(self._env_path)
         missing = [k for k in _REQUIRED_KEYS if not values.get(k)]
         if missing:
             raise AuthError(
-                f"Missing required .env keys: {', '.join(missing)}. "
-                f"Run oauth_setup.py to initialize credentials."
+                f"Missing required credentials: {', '.join(missing)}. "
+                "Set them as environment variables or in .env."
             )
         return {k: values[k] for k in _REQUIRED_KEYS} | {k: values.get(k, "") for k in _OPTIONAL_KEYS}  # type: ignore[return-value]
 
@@ -84,10 +84,10 @@ class LinkedInTokenManager:
         return token_data
 
     def persist(self, token_data: LinkedInTokenData) -> None:
-        set_key(str(self._env_path), "LINKEDIN_ACCESS_TOKEN", token_data.access_token)
-        set_key(str(self._env_path), "LINKEDIN_REFRESH_TOKEN", token_data.refresh_token)
-        set_key(str(self._env_path), "LINKEDIN_TOKEN_EXPIRY", str(token_data.token_expiry))
-        self._logger.debug("Updated tokens written to .env.")
+        persist_value(self._env_path, "LINKEDIN_ACCESS_TOKEN", token_data.access_token)
+        persist_value(self._env_path, "LINKEDIN_REFRESH_TOKEN", token_data.refresh_token)
+        persist_value(self._env_path, "LINKEDIN_TOKEN_EXPIRY", str(token_data.token_expiry))
+        self._logger.debug("Updated tokens persisted.")
 
     async def get_valid_token(self) -> str:
         env = self.load()

@@ -9,6 +9,10 @@ services:
     envVars:
       - key: PORT
         value: "8000"
+      - key: MCP_TRANSPORT
+        value: streamable-http
+      - key: MCP_AUTH_TOKEN
+        generateValue: true
       - key: LINKEDIN_CLIENT_ID
         sync: false
       - key: LINKEDIN_CLIENT_SECRET

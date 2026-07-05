@@ -32,7 +32,7 @@ class TokenManager:
 
     def load(self) -> dict[str, str]:
         values = dotenv_values(self._env_path)
-        missing = [k for k in _REQUIRED_KEYS if not values.get(k, "").strip()]
+        missing = [k for k in _REQUIRED_KEYS if not (values.get(k) or "").strip()]
         if missing:
             raise AuthError(
                 f"Missing required .env keys: {', '.join(missing)}. "
@@ -47,6 +47,12 @@ class TokenManager:
         if self._never_expires(expiry):
             return False
         return int(time.time()) >= expiry
+
+    def expiring_soon(self, expiry: int) -> bool:
+        if self._never_expires(expiry):
+            return False
+        seconds_remaining = expiry - int(time.time())
+        return 0 < seconds_remaining < _WARNING_WINDOW
 
     def warn_if_expiring_soon(self, expiry: int) -> None:
         if self._never_expires(expiry):
@@ -92,9 +98,22 @@ class TokenManager:
     async def get_valid_token(self) -> str:
         env = self.load()
         expiry = int(env["THREADS_TOKEN_EXPIRY"])
-        self.warn_if_expiring_soon(expiry)
         if self.is_expired(expiry):
-            token_data = await self.refresh(env["THREADS_ACCESS_TOKEN"])
-            self.persist(token_data)
-            return token_data.access_token
+            # th_refresh_token requires a still-valid token, so once expired
+            # the refresh is guaranteed to fail — surface a clear error instead.
+            raise AuthError(
+                "Threads access token has expired and can no longer be refreshed "
+                "automatically. Run oauth_setup.py (or the Meta panel) to obtain "
+                "a new token and update THREADS_ACCESS_TOKEN / THREADS_TOKEN_EXPIRY."
+            )
+        if self.expiring_soon(expiry):
+            try:
+                token_data = await self.refresh(env["THREADS_ACCESS_TOKEN"])
+                self.persist(token_data)
+                return token_data.access_token
+            except Exception as exc:
+                self._logger.warning(
+                    "Proactive Threads token refresh failed (%s); "
+                    "current token is still valid, continuing with it.", exc
+                )
         return env["THREADS_ACCESS_TOKEN"]

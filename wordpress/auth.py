@@ -28,7 +28,7 @@ class TokenManager:
 
     def load(self) -> dict[str, str]:
         values = dotenv_values(self._env_path)
-        missing = [k for k in _REQUIRED_KEYS if not values.get(k, "").strip()]
+        missing = [k for k in _REQUIRED_KEYS if not (values.get(k) or "").strip()]
         if missing:
             raise AuthError(
                 f"Missing required .env keys: {', '.join(missing)}. "

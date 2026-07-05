@@ -28,6 +28,12 @@ class ThreadsClient:
     async def _token(self) -> str:
         return await self._tm.get_valid_token()
 
+    async def _auth_headers(self) -> dict[str, str]:
+        # Token goes in the Authorization header (officially supported by the
+        # Threads API) instead of the query string, so it never appears in URLs,
+        # error messages, or logs.
+        return {"Authorization": f"Bearer {await self._token()}"}
+
     def _raise_for_status(self, response: httpx.Response) -> None:
         if response.status_code >= 400:
             self._logger.error(
@@ -37,11 +43,12 @@ class ThreadsClient:
 
     @_retried_with_timeout
     async def get_account_info(self) -> ThreadsAccountInfo:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
             response = await client.get(
                 "/me",
-                params={"fields": "id,username,name", "access_token": token},
+                params={"fields": "id,username,name"},
+                headers=headers,
             )
         self._raise_for_status(response)
         data = response.json()
@@ -53,15 +60,15 @@ class ThreadsClient:
 
     @_retried_with_timeout
     async def get_threads(self, count: int = 10) -> list[ThreadItem]:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
             response = await client.get(
                 f"/{self._user_id}/threads",
                 params={
                     "fields": "id,text,timestamp,media_type,permalink",
                     "limit": count,
-                    "access_token": token,
                 },
+                headers=headers,
             )
         self._raise_for_status(response)
         items = []
@@ -79,35 +86,35 @@ class ThreadsClient:
 
     @_retried_with_timeout
     async def delete_thread(self, thread_id: str) -> None:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
-            response = await client.delete(
-                f"/{thread_id}",
-                params={"access_token": token},
-            )
+            response = await client.delete(f"/{thread_id}", headers=headers)
         self._raise_for_status(response)
 
     @_retried_with_timeout
     async def _create_container(self, text: str, image_url: str | None = None) -> str:
-        token = await self._token()
-        params: dict = {"access_token": token, "text": text}
+        headers = await self._auth_headers()
+        params: dict = {"text": text}
         if image_url:
             params["media_type"] = "IMAGE"
             params["image_url"] = image_url
         else:
             params["media_type"] = "TEXT"
         async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
-            response = await client.post(f"/{self._user_id}/threads", params=params)
+            response = await client.post(
+                f"/{self._user_id}/threads", params=params, headers=headers
+            )
         self._raise_for_status(response)
         return response.json()["id"]
 
     async def _wait_for_container(self, container_id: str) -> None:
-        token = await self._token()
+        headers = await self._auth_headers()
         for attempt in range(_CONTAINER_POLL_MAX):
             async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
                 response = await client.get(
                     f"/{container_id}",
-                    params={"fields": "status,error_type", "access_token": token},
+                    params={"fields": "status,error_type"},
+                    headers=headers,
                 )
             self._raise_for_status(response)
             data = response.json()
@@ -132,11 +139,12 @@ class ThreadsClient:
 
     @_retried_publish
     async def _publish_container(self, container_id: str) -> str:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
             response = await client.post(
                 f"/{self._user_id}/threads_publish",
-                params={"creation_id": container_id, "access_token": token},
+                params={"creation_id": container_id},
+                headers=headers,
             )
         self._raise_for_status(response)
         return response.json()["id"]

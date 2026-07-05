@@ -35,14 +35,26 @@ Sistema de automatización de redes sociales mediante MCP servers. Está diseña
 
 ## Configuración en Claude Desktop / Claude Code
 
-Un único entry point para todas las plataformas API:
+Un único entry point para todas las plataformas API. Las credenciales se pueden configurar de **tres formas equivalentes** (el código lee primero las variables de entorno y luego el `.env`):
+
+1. **Bloque `"env"` del config del cliente MCP** — recomendado para uso local
+2. **Variables de entorno del dashboard de Render** — para despliegue remoto
+3. **Archivo `unified-mcp/.env`** — para desarrollo
+
+### Uso local (stdio)
 
 ```json
 {
   "mcpServers": {
     "social-mcp": {
       "command": "python",
-      "args": ["/ruta/absoluta/social-mcps/unified-mcp/server.py"]
+      "args": ["/ruta/absoluta/social-mcps/unified-mcp/server.py"],
+      "env": {
+        "WP_ACCESS_TOKEN": "tu_token",
+        "WP_SITE_ID": "12345678",
+        "LINKEDIN_ACCESS_TOKEN": "...",
+        "ENABLE_THREADS": "false"
+      }
     },
     "social-automation": {
       "command": "node",
@@ -52,12 +64,21 @@ Un único entry point para todas las plataformas API:
 }
 ```
 
-`social-automation` es opcional si no necesitas publicar en X ni compartir en el feed personal de Facebook desde el equipo local.
+El bloque `"env"` es opcional si ya tienes un `.env` en `unified-mcp/`. `social-automation` es opcional si no necesitas publicar en X ni compartir en el feed personal de Facebook desde el equipo local.
 
 **Windows** — rutas con barras normales o dobles barras invertidas:
 ```json
 "args": ["C:/Users/TuUsuario/social-mcps/unified-mcp/server.py"]
 ```
+
+### Uso remoto (servidor desplegado en Render)
+
+Añade el servidor como conector MCP remoto en cualquier app que lo soporte (Claude, ChatGPT, etc.):
+
+- **URL**: `https://tu-servicio.onrender.com/mcp`
+- **Header de autenticación**: `Authorization: Bearer <MCP_AUTH_TOKEN>`
+
+El valor de `MCP_AUTH_TOKEN` es el que Render genera automáticamente en el primer deploy (visible en el dashboard → Environment). Sin ese header, el servidor responde `401 Unauthorized`.
 
 ---
 
@@ -72,9 +93,10 @@ ENABLE_FACEBOOK=true
 ENABLE_THREADS=true
 ENABLE_WORDPRESS=true
 ENABLE_X=true
+ENABLE_FB_SHARE=true
 ```
 
-Útil para deshabilitar temporalmente una plataforma con token caducado sin tener que detener el servidor.
+Todas están activadas por defecto. Una plataforma desactivada no registra sus tools ni valida sus credenciales — útil para empezar con una sola red configurada o para apagar temporalmente una plataforma con el token caducado.
 
 ---
 
@@ -153,7 +175,18 @@ npm run setup-fb    # guarda sesión de Facebook en auth/fb-session.json
 
 ## Despliegue en Render
 
-El archivo `unified-mcp/render.yaml` configura el despliegue automático. El servidor arranca con transport `streamable-http` para ser accesible como endpoint HTTP desde cualquier agente remoto.
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/danilotestoni/social-mcps)
+
+Cada usuario despliega **su propia instancia** con sus propias credenciales — nadie comparte servidor ni tokens. El botón usa el `render.yaml` del repositorio:
+
+1. Haz clic en el botón (necesitas cuenta en Render, el plan free es suficiente)
+2. Render crea el servicio y **genera automáticamente un `MCP_AUTH_TOKEN` aleatorio**
+3. Rellena en el dashboard (Environment) las credenciales de las plataformas que uses y pon `ENABLE_*=false` en las que no
+4. Copia la URL del servicio + el `MCP_AUTH_TOKEN` en tu app (ver "Uso remoto" arriba)
+
+El servidor arranca con transport `streamable-http` (variable `MCP_TRANSPORT`) para ser accesible como endpoint HTTP desde cualquier agente remoto. En local, sin esa variable, arranca en modo `stdio` para clientes MCP de escritorio.
+
+**Seguridad**: toda petición HTTP debe llevar `Authorization: Bearer <MCP_AUTH_TOKEN>`; sin él el servidor responde 401. Los tokens de las plataformas nunca viajan en URLs (van en headers), por lo que no aparecen en logs ni en mensajes de error.
 
 `social-automation-mcp` **no se puede desplegar en Render** (Chromium no cabe en el plan gratuito). Cuando una acción requiere Playwright desde el servidor en la nube, `notifier.py` devuelve un error estructurado con instrucciones para ejecutarla manualmente desde local.
 

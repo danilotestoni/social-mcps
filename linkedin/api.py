@@ -96,16 +96,13 @@ class LinkedInClient:
         self, person_urn: str, count: int = 10
     ) -> list[UGCPostElement]:
         headers = await self._headers()
+        # Rest.li 2.0 requires literal parentheses in List(...) — passing this
+        # via httpx params would percent-encode them and LinkedIn returns 400.
+        # The URN itself must be encoded, the parentheses must not.
+        encoded_urn = urllib.parse.quote(person_urn, safe="")
+        url = f"/v2/ugcPosts?q=authors&authors=List({encoded_urn})&count={count}"
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
-            response = await client.get(
-                "/v2/ugcPosts",
-                params={
-                    "q": "authors",
-                    "authors": f"List({person_urn})",
-                    "count": count,
-                },
-                headers=headers,
-            )
+            response = await client.get(url, headers=headers)
         self._raise_for_status(response)
         elements = response.json().get("elements", [])
         posts = []

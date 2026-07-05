@@ -55,6 +55,12 @@ class InstagramClient:
     async def _token(self) -> str:
         return await self._tm.get_valid_token()
 
+    async def _auth_headers(self) -> dict[str, str]:
+        # Token goes in the Authorization header (officially supported by the
+        # Graph API) instead of the query string, so it never appears in URLs,
+        # error messages, or logs.
+        return {"Authorization": f"Bearer {await self._token()}"}
+
     def _raise_for_status(self, response: httpx.Response) -> None:
         if response.status_code >= 400:
             self._logger.error(
@@ -64,14 +70,12 @@ class InstagramClient:
 
     @_retried
     async def get_account_info(self) -> AccountInfo:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.get(
                 f"/{self._account_id}",
-                params={
-                    "fields": "id,username,name,followers_count,media_count",
-                    "access_token": token,
-                },
+                params={"fields": "id,username,name,followers_count,media_count"},
+                headers=headers,
             )
         self._raise_for_status(response)
         data = response.json()
@@ -85,15 +89,15 @@ class InstagramClient:
 
     @_retried
     async def get_media(self, count: int = 10) -> list[MediaItem]:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.get(
                 f"/{self._account_id}/media",
                 params={
                     "fields": "id,caption,media_type,timestamp,permalink",
                     "limit": count,
-                    "access_token": token,
                 },
+                headers=headers,
             )
         self._raise_for_status(response)
         items = []
@@ -111,36 +115,31 @@ class InstagramClient:
 
     @_retried
     async def delete_media(self, media_id: str) -> None:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
-            response = await client.delete(
-                f"/{media_id}",
-                params={"access_token": token},
-            )
+            response = await client.delete(f"/{media_id}", headers=headers)
         self._raise_for_status(response)
 
     @_retried
     async def _create_image_container(self, image_url: str, caption: str) -> str:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.post(
                 f"/{self._account_id}/media",
-                params={
-                    "image_url": image_url,
-                    "caption": caption,
-                    "access_token": token,
-                },
+                params={"image_url": image_url, "caption": caption},
+                headers=headers,
             )
         self._raise_for_status(response)
         return response.json()["id"]
 
     async def _wait_for_container(self, container_id: str) -> None:
-        token = await self._token()
+        headers = await self._auth_headers()
         for attempt in range(_CONTAINER_POLL_MAX):
             async with httpx.AsyncClient(base_url=_BASE_URL) as client:
                 response = await client.get(
                     f"/{container_id}",
-                    params={"fields": "status_code", "access_token": token},
+                    params={"fields": "status_code"},
+                    headers=headers,
                 )
             self._raise_for_status(response)
             status = response.json().get("status_code", "")
@@ -162,11 +161,12 @@ class InstagramClient:
 
     @_retried_publish
     async def _publish_container(self, container_id: str) -> str:
-        token = await self._token()
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(base_url=_BASE_URL) as client:
             response = await client.post(
                 f"/{self._account_id}/media_publish",
-                params={"creation_id": container_id, "access_token": token},
+                params={"creation_id": container_id},
+                headers=headers,
             )
         self._raise_for_status(response)
         return response.json()["id"]

@@ -37,6 +37,22 @@ _ENABLED = {
     name: _enabled(name)
     for name in ("LINKEDIN", "FACEBOOK", "INSTAGRAM", "THREADS", "WORDPRESS", "X", "FB_SHARE")
 }
+
+
+def _image_gen_enabled() -> bool:
+    """
+    IMAGE_GEN defaults to auto: enabled only when GEMINI_API_KEY is present,
+    so existing deployments without the key keep working. An explicit
+    ENABLE_IMAGE_GEN=true/false always wins.
+    """
+    values = env_values(_ENV_PATH)
+    raw = values.get("ENABLE_IMAGE_GEN")
+    if raw is not None and raw.strip():
+        return raw.strip().lower() in _TRUE_VALUES
+    return bool((values.get("GEMINI_API_KEY") or "").strip())
+
+
+_ENABLED["IMAGE_GEN"] = _image_gen_enabled()
 _logger.info(
     "Enabled platforms: %s",
     ", ".join(k for k, v in _ENABLED.items() if v) or "none",
@@ -94,6 +110,16 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
         x_env = XCredentials(_ENV_PATH).load()
         context["x"] = XClient(
             x_env["X_USERNAME"], x_env["X_PASSWORD"], x_env["X_EMAIL"]
+        )
+
+    if _ENABLED["IMAGE_GEN"]:
+        from auth.gemini_auth import GeminiCredentials
+        from clients.gemini_client import GeminiImageClient
+
+        gemini_env = GeminiCredentials(_ENV_PATH).load()
+        context["gemini"] = GeminiImageClient(
+            gemini_env["GEMINI_API_KEY"],
+            model=env.get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
         )
 
     yield context
@@ -312,6 +338,38 @@ if _ENABLED["FB_SHARE"]:
         instructing to invoke share_to_fb_feed from social-automation-mcp locally.
         """
         return await fb_share.share_to_fb_feed(post_url, message, dry_run)
+
+
+# ── Image generation (Gemini) ─────────────────────────────────────────────────
+
+if _ENABLED["IMAGE_GEN"]:
+    import tools.image_tools as img
+
+    @mcp.tool()
+    async def generate_image(
+        prompt: str,
+        aspect_ratio: str = "1:1",
+        upload_to_wordpress: bool = True,
+        dry_run: bool = False,
+    ) -> dict:
+        """
+        Generate an image with Gemini (nano banana) from an English text prompt.
+        Returns the local file path and, when WordPress is enabled and
+        upload_to_wordpress is true, a public media URL usable directly as
+        image_url for Instagram, Facebook, and Threads posts.
+        Aspect ratios: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9.
+        The prompt can include short text to render inside the image.
+        """
+        ctx = mcp.get_context()
+        lc = ctx.request_context.lifespan_context
+        return await img.generate_image(
+            lc["gemini"],
+            prompt,
+            aspect_ratio,
+            wordpress_client=lc.get("wordpress"),
+            upload_to_wordpress=upload_to_wordpress,
+            dry_run=dry_run,
+        )
 
 
 # ── HTTP auth (public deployments) ────────────────────────────────────────────

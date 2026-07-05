@@ -30,6 +30,15 @@ Sistema de automatización de redes sociales mediante MCP servers. Está diseña
 | WordPress.com | `unified-mcp` | `wordpress_publish_post`, `wordpress_get_last_posts`, `wordpress_delete_post`, `wordpress_get_account_info` |
 | X (Twitter) | `unified-mcp` (Twikit) + `social-automation-mcp` (Playwright) | `x_post_tweet` / `post_to_x` |
 | Facebook feed personal | `social-automation-mcp` (Playwright) | `share_to_fb_feed` |
+| Generación de imágenes | `unified-mcp` (Gemini "nano banana") | `generate_image` |
+
+### Generación de imágenes con Gemini
+
+La tool `generate_image` crea imágenes con **Gemini 2.5 Flash Image** (API key gratuita en [aistudio.google.com/apikey](https://aistudio.google.com/apikey), variable `GEMINI_API_KEY`). Se activa automáticamente cuando la key está configurada — sin key, la tool no aparece.
+
+- Acepta un prompt en inglés (puede incluir texto corto a renderizar dentro de la imagen) y `aspect_ratio` (1:1, 16:9, 9:16, etc.)
+- Si WordPress está activado, sube la imagen a su mediateca y devuelve una **URL pública estable**, directamente usable como `image_url` en Instagram, Facebook, LinkedIn y Threads
+- Complementa a Canva en el flujo de `adhoc-publisher` (ver su CLAUDE.md, PASO 5)
 
 ---
 

@@ -101,6 +101,21 @@ class WordPressClient:
         filename = Path(image_path).name
         return await self._upload_media_bytes(image_bytes, filename)
 
+    async def upload_media_get_url(self, data: bytes, filename: str) -> dict:
+        """Upload media bytes and return {'id': int, 'url': str} with the public URL."""
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+            response = await client.post(
+                f"/sites/{self._site_id}/media/new",
+                headers=self._headers(),
+                files={"media[]": (filename, data, content_type)},
+            )
+        self._raise_for_status(response)
+        media_items = response.json().get("media", [])
+        if not media_items:
+            raise ValueError("Media upload succeeded but returned no media items.")
+        return {"id": media_items[0]["ID"], "url": media_items[0].get("URL", "")}
+
     async def upload_media_from_url(self, image_url: str) -> int:
         async with httpx.AsyncClient() as client:
             response = await client.get(image_url, timeout=30.0)

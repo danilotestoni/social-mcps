@@ -71,3 +71,5 @@ services:
         sync: false
       - key: NOTIFY_WEBHOOK_URL
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false

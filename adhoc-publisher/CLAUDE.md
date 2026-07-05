@@ -96,7 +96,16 @@ Si hay un problema grave (dato incorrecto, tono muy errado), marcarlo con ⚠️
 
 ---
 
-## PASO 5 — Imagen con Canva
+## PASO 5 — Imagen (Canva o Gemini)
+
+Hay dos proveedores disponibles. Elegir según disponibilidad y preferencia del usuario:
+
+| Proveedor | Cuándo usarlo | Ventajas |
+|---|---|---|
+| **Canva** (por defecto) | Cuando el MCP de Canva está conectado | Editable después, diseños guardados en la cuenta |
+| **Gemini** (`generate_image` del unified-mcp) | Cuando Canva no está disponible, se agota su cuota, o el usuario lo pide | URL pública estable (sin caducidad de 2 min), el texto se genera dentro de la imagen, funciona desde Render |
+
+La clasificación visual y el prompt (siguiente sección) son **los mismos para ambos**.
 
 ### Clasificar la noticia por categoría visual:
 
@@ -116,7 +125,7 @@ Si hay un problema grave (dato incorrecto, tono muy errado), marcarlo con ⚠️
 [descripción visual principal], [paleta de la categoría], [atmósfera], [estilo artístico], clean composition with empty space at the bottom, no text, no logos, highly detailed
 ```
 
-### Crear imagen en Canva:
+### Opción A — Crear imagen en Canva:
 ```
 generate-design(
   type="instagram_post",  // 1080x1080px
@@ -132,7 +141,22 @@ Tras generar, añadir texto en español sobre la imagen (zona inferior, máx. 8 
 
 **Guardar solo el Canva Design ID** (formato DXXXXXXXXXX). No guardar URLs de exportación — se re-exporta justo antes de publicar.
 
-Si Canva no está disponible: indicar ⚠️ e incluir el prompt para uso manual.
+### Opción B — Crear imagen con Gemini (unified-mcp):
+```
+generate_image(
+  prompt="[prompt en inglés] with the Spanish text \"[TEXTO ≤ 8 palabras]\" overlaid in clean white typography at the bottom",
+  aspect_ratio="1:1",
+  upload_to_wordpress=true
+)
+```
+
+Diferencias clave con Canva:
+- El **texto en español va dentro del prompt** — Gemini lo renderiza directamente en la imagen (no hay paso de edición posterior).
+- La respuesta incluye `public_url` (imagen subida a la mediateca de WordPress): es una **URL estable que no caduca** — usarla directamente en LinkedIn, Facebook e Instagram sin re-exportar.
+- Guardar `public_url` y `local_path` de la respuesta.
+- Si la imagen no convence, regenerar con el prompt ajustado (cada llamada crea una imagen nueva).
+
+Si ningún proveedor está disponible: indicar ⚠️ e incluir el prompt para uso manual.
 
 ---
 
@@ -188,11 +212,15 @@ wordpress__publish_post(
 ```
 Guardar la URL devuelta. Sustituir `[WORDPRESS_URL]` en todos los textos restantes antes de publicarlos. Usar `short_url` (formato wp.me) cuando esté disponible.
 
-### 7.2 — Exportar imagen de Canva (antes de Instagram)
+### 7.2 — Obtener URL de imagen (antes de Instagram)
+
+**Si la imagen es de Canva** — exportar justo antes de usar:
 ```
 export-design(designId="[CANVA_ID]", format="jpg")
 ```
 Usar esta URL para LinkedIn, Facebook e Instagram. Re-exportar siempre si han pasado más de 2 minutos.
+
+**Si la imagen es de Gemini** — usar la `public_url` guardada en el PASO 5. Es estable (mediateca de WordPress), no necesita re-exportación ni caduca.
 
 ### 7.3 — LinkedIn
 ```
@@ -226,7 +254,7 @@ threads__publish_post(
   text="[TEXTO + URL WordPress si cabe en 280 chars]"
 )
 ```
-**Nunca pasar `image_url`** — las URLs S3 de Canva causan error 500 en Threads.
+**Con imagen de Canva, nunca pasar `image_url`** — sus URLs S3 causan error 500 en Threads. Con imagen de Gemini sí se puede pasar `image_url` (la `public_url` de WordPress es compatible con Threads).
 
 ### 7.7 — X (Twitter)
 ```
@@ -242,8 +270,8 @@ Si el MCP falla: mostrar el texto listo para copiar/pegar en x.com/compose/post.
 
 1. Confirmar antes de publicar — siempre, sin excepción
 2. WordPress siempre primero — su URL se necesita para el resto
-3. Exportar Canva justo antes de Instagram — nunca usar URLs viejas
-4. Threads sin imagen — nunca pasar `image_url`
+3. Exportar Canva justo antes de Instagram — nunca usar URLs viejas (no aplica a Gemini: su public_url es estable)
+4. Threads sin imagen si viene de Canva — con Gemini (public_url de WordPress) sí se admite
 5. Facebook error vacío = probable éxito — no reintentar
 6. Si un canal falla, continuar con los demás
 7. Si el usuario solo quiere publicar en algunos canales, saltarse los demás sin error

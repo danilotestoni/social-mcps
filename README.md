@@ -1,6 +1,6 @@
 # social-mcps
 
-Sistema de automatización de redes sociales mediante MCP servers. Está diseñado en dos capas: un **servidor principal** para despliegue en la nube (Render u otro proveedor) y un **servidor de automatización local** para las acciones que requieren navegador.
+Sistema de automatización de redes sociales mediante MCP servers. Está diseñado en dos capas: un **servidor unificado** para despliegue en la nube (Render u otro proveedor) y un **servidor de automatización local** para las acciones que requieren navegador.
 
 ---
 
@@ -8,7 +8,7 @@ Sistema de automatización de redes sociales mediante MCP servers. Está diseña
 
 | Componente | Tipo | Despliegue | Plataformas |
 |---|---|---|---|
-| `Social-MCP/` | Python FastMCP — API REST | Local o Render | LinkedIn, Instagram, Facebook (Page), Threads, WordPress, X (Twikit) |
+| `unified-mcp/` | Python FastMCP — API REST | Local o Render | LinkedIn, Instagram, Facebook (Page), Threads, WordPress, X (Twikit) |
 | `social-automation-mcp/` | TypeScript FastMCP — Playwright | Solo local | X (Twitter), Facebook feed personal |
 
 ### Por qué dos componentes
@@ -23,12 +23,12 @@ Sistema de automatización de redes sociales mediante MCP servers. Está diseña
 
 | Plataforma | Servidor | Herramientas MCP |
 |---|---|---|
-| LinkedIn | `Social-MCP` | `linkedin_publish_post`, `linkedin_get_last_posts`, `linkedin_delete_post`, `linkedin_get_account_info` |
-| Instagram | `Social-MCP` | `instagram_publish_post`, `instagram_get_last_posts`, `instagram_delete_post`, `instagram_get_account_info` |
-| Facebook (Page) | `Social-MCP` | `facebook_publish_post`, `facebook_get_last_posts`, `facebook_delete_post`, `facebook_get_account_info` |
-| Threads | `Social-MCP` | `threads_publish_post`, `threads_get_last_posts`, `threads_delete_post`, `threads_get_account_info` |
-| WordPress.com | `Social-MCP` | `wordpress_publish_post`, `wordpress_get_last_posts`, `wordpress_delete_post`, `wordpress_get_account_info` |
-| X (Twitter) | `Social-MCP` (Twikit) + `social-automation-mcp` (Playwright) | `x_post_tweet` / `post_to_x` |
+| LinkedIn | `unified-mcp` | `linkedin_publish_post`, `linkedin_get_last_posts`, `linkedin_delete_post`, `linkedin_get_account_info` |
+| Instagram | `unified-mcp` | `instagram_publish_post`, `instagram_get_last_posts`, `instagram_delete_post`, `instagram_get_account_info` |
+| Facebook (Page) | `unified-mcp` | `facebook_publish_post`, `facebook_get_last_posts`, `facebook_delete_post`, `facebook_get_account_info` |
+| Threads | `unified-mcp` | `threads_publish_post`, `threads_get_last_posts`, `threads_delete_post`, `threads_get_account_info` |
+| WordPress.com | `unified-mcp` | `wordpress_publish_post`, `wordpress_get_last_posts`, `wordpress_delete_post`, `wordpress_get_account_info` |
+| X (Twitter) | `unified-mcp` (Twikit) + `social-automation-mcp` (Playwright) | `x_post_tweet` / `post_to_x` |
 | Facebook feed personal | `social-automation-mcp` (Playwright) | `share_to_fb_feed` |
 
 ---
@@ -42,7 +42,7 @@ Un único entry point para todas las plataformas API:
   "mcpServers": {
     "social-mcp": {
       "command": "python",
-      "args": ["/ruta/absoluta/social-mcps/Social-MCP/server.py"]
+      "args": ["/ruta/absoluta/social-mcps/unified-mcp/server.py"]
     },
     "social-automation": {
       "command": "node",
@@ -56,14 +56,14 @@ Un único entry point para todas las plataformas API:
 
 **Windows** — rutas con barras normales o dobles barras invertidas:
 ```json
-"args": ["C:/Users/TuUsuario/social-mcps/Social-MCP/server.py"]
+"args": ["C:/Users/TuUsuario/social-mcps/unified-mcp/server.py"]
 ```
 
 ---
 
 ## Activar y desactivar plataformas
 
-Cada plataforma se activa o desactiva en `Social-MCP/.env` con una variable `ENABLE_*`. Las plataformas desactivadas no registran sus herramientas en el servidor MCP — el agente simplemente no las ve.
+Cada plataforma se activa o desactiva en `unified-mcp/.env` con una variable `ENABLE_*`. Las plataformas desactivadas no registran sus herramientas en el servidor MCP — el agente simplemente no las ve.
 
 ```env
 ENABLE_LINKEDIN=true
@@ -82,7 +82,7 @@ ENABLE_X=true
 
 ```
 social-mcps/
-├── Social-MCP/                    ← Servidor unificado (Render-compatible)
+├── unified-mcp/                    ← Servidor unificado (Render-compatible)
 │   ├── server.py                   ← Entry point FastMCP, transport streamable-http
 │   ├── core/
 │   │   ├── logger.py               ← Logger compartido
@@ -109,7 +109,7 @@ social-mcps/
 └── wordpress/                      ← Servidor independiente legacy
 ```
 
-Los servidores individuales de cada plataforma (`linkedin/`, `instagram/`, etc.) siguen funcionando de forma standalone para uso local. El servidor principal es el modo de uso recomendado.
+Los servidores individuales de cada plataforma (`linkedin/`, `instagram/`, etc.) siguen funcionando de forma standalone para uso local. El servidor unificado es el modo de uso recomendado.
 
 ---
 
@@ -118,7 +118,7 @@ Los servidores individuales de cada plataforma (`linkedin/`, `instagram/`, etc.)
 ### 1. Configurar credenciales
 
 ```bash
-cd Social-MCP
+cd unified-mcp
 cp .env.example .env
 ```
 
@@ -127,14 +127,14 @@ Edita `.env` con las credenciales de cada plataforma que quieras usar. Consulta 
 ### 2. Instalar dependencias
 
 ```bash
-cd Social-MCP
+cd unified-mcp
 pip install -r requirements.txt
 ```
 
-### 3. Arrancar el servidor principal
+### 3. Arrancar el servidor unificado
 
 ```bash
-python Social-MCP/server.py
+python unified-mcp/server.py
 ```
 
 ### 4. (Opcional) Configurar social-automation-mcp
@@ -153,7 +153,7 @@ npm run setup-fb    # guarda sesión de Facebook en auth/fb-session.json
 
 ## Despliegue en Render
 
-El archivo `Social-MCP/render.yaml` configura el despliegue automático. El servidor arranca con transport `streamable-http` para ser accesible como endpoint HTTP desde cualquier agente remoto.
+El archivo `unified-mcp/render.yaml` configura el despliegue automático. El servidor arranca con transport `streamable-http` para ser accesible como endpoint HTTP desde cualquier agente remoto.
 
 `social-automation-mcp` **no se puede desplegar en Render** (Chromium no cabe en el plan gratuito). Cuando una acción requiere Playwright desde el servidor en la nube, `notifier.py` devuelve un error estructurado con instrucciones para ejecutarla manualmente desde local.
 

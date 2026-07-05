@@ -2,10 +2,10 @@
 
 MCP server de automatización local mediante Playwright + Stealth. Proporciona las herramientas que **no tienen alternativa vía API REST**:
 
-- **`post_to_x`** — Publica un tweet en X (Twitter) usando Chromium. Actúa como fallback cuando Twikit (el cliente ligero del servidor principal) falla.
+- **`post_to_x`** — Publica un tweet en X (Twitter) usando Chromium. Actúa como fallback cuando Twikit (el cliente ligero del servidor unificado) falla.
 - **`share_to_fb_feed`** — Comparte un post de una Facebook Page en el feed personal. No existe ninguna API REST para esta acción — Playwright es la única opción.
 
-> **Este servidor es solo local.** Chromium requiere ~826 MB de RAM, incompatible con el plan gratuito de Render (512 MB). El servidor principal (`Social-MCP/`) cubre X via Twikit; cuando Twikit falla o cuando se necesita compartir en Facebook personal, el agente te notifica para que lo ejecutes desde aquí.
+> **Este servidor es solo local.** Chromium requiere ~826 MB de RAM, incompatible con el plan gratuito de Render (512 MB). El servidor unificado (`unified-mcp/`) cubre X via Twikit; cuando Twikit falla o cuando se necesita compartir en Facebook personal, el agente te notifica para que lo ejecutes desde aquí.
 
 ---
 
@@ -88,13 +88,13 @@ En Windows:
 
 Ejecuta `npm run build` antes de reiniciar Claude Desktop si hiciste cambios.
 
-Si también tienes el servidor principal, añade ambos:
+Si también tienes el servidor unificado, añade ambos:
 ```json
 {
   "mcpServers": {
     "social-mcp": {
       "command": "python",
-      "args": ["/ruta/absoluta/social-mcps/Social-MCP/server.py"]
+      "args": ["/ruta/absoluta/social-mcps/unified-mcp/server.py"]
     },
     "social-automation": {
       "command": "node",

@@ -38,7 +38,7 @@ La tool `generate_image` crea imágenes con **Gemini 2.5 Flash Image** (API key 
 
 - Acepta un prompt en inglés (puede incluir texto corto a renderizar dentro de la imagen) y `aspect_ratio` (1:1, 16:9, 9:16, etc.)
 - Si WordPress está activado, sube la imagen a su mediateca y devuelve una **URL pública estable**, directamente usable como `image_url` en Instagram, Facebook, LinkedIn y Threads
-- Complementa a Canva en el flujo de `adhoc-publisher` (ver su CLAUDE.md, PASO 5)
+- Es el **proveedor de imágenes por defecto** del flujo de `adhoc-publisher`; Canva queda como opción B / fallback (ver su CLAUDE.md, PASO 5)
 
 ---
 

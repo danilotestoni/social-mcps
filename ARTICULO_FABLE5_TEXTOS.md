@@ -61,7 +61,7 @@ Es la primera vez en la historia que una IA líder es retirada por orden del Gob
 
 ## 🧵 THREADS (máx 280 caracteres)
 
-El Gobierno de EE.UU. ordenó a Anthropic apagar Fable 5 y Mythos 5 solo 3 días después del lanzamiento. La primera IA líder retirada por orden federal de la historia. 👉 [ENLACE_WORDPRESS]
+El Gobierno de EE.UU. ordenó a Anthropic apagar Fable 5 y Mythos 5 solo 3 días después del lanzamiento. Primera vez que una IA líder es retirada por orden federal. 👉 [ENLACE_WORDPRESS]
 
 ---
 

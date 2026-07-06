@@ -40,7 +40,7 @@ class GeminiImageClient:
             "temperature": 1,
             "max_output_tokens": 65536,
             "top_p": 0.95,
-            "thinking_level": "minimal",
+            "thinking_level": "low",
         }
         prompt_with_format = (
             f"{prompt}\n\n"

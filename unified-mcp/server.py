@@ -119,7 +119,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
         gemini_env = GeminiCredentials(_ENV_PATH).load()
         context["gemini"] = GeminiImageClient(
             gemini_env["GEMINI_API_KEY"],
-            model=env.get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
+            model=env.get("GEMINI_IMAGE_MODEL", "models/gemini-3.1-flash-lite-image"),
         )
 
     yield context
@@ -353,7 +353,7 @@ if _ENABLED["IMAGE_GEN"]:
         dry_run: bool = False,
     ) -> dict:
         """
-        Generate an image with Gemini (nano banana) from an English text prompt.
+        Generate an image with Gemini from an English text prompt.
         Returns the local file path and, when WordPress is enabled and
         upload_to_wordpress is true, a public media URL usable directly as
         image_url for Instagram, Facebook, and Threads posts.

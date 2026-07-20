@@ -96,14 +96,14 @@ Si hay un problema grave (dato incorrecto, tono muy errado), marcarlo con ⚠️
 
 ---
 
-## PASO 5 — Imagen (Gemini o Canva)
+## PASO 5 — Imagen (Gemini/Pollinations o Canva)
 
-Hay dos proveedores disponibles. Elegir según disponibilidad y preferencia del usuario:
+`generate_image` (unified-mcp) ya resuelve el proveedor internamente: intenta **Gemini** primero y, si no está configurado, falla o agota cuota, cae automáticamente a **Pollinations.ai** (gratis, sin key, sin caducidad) sin ninguna acción extra. La respuesta indica `provider: "gemini"` o `"pollinations"` — revisar ese campo si el texto en español dentro de la imagen no se ve bien (Pollinations es menos consistente que Gemini renderizando texto incrustado).
 
 | Proveedor | Cuándo usarlo | Ventajas |
 |---|---|---|
-| **Gemini** (`generate_image` del unified-mcp) — **por defecto** | Siempre que la tool esté disponible | URL pública estable (sin caducidad de 2 min), el texto se genera dentro de la imagen, compatible con Threads, funciona desde Render |
-| **Canva** (opción B) | Cuando Gemini no está disponible, falla, o el usuario lo pide expresamente | Editable después, diseños guardados en la cuenta |
+| **Gemini/Pollinations** (`generate_image` del unified-mcp) — **por defecto** | Siempre; la tool elige el proveedor automáticamente | URL pública estable (sin caducidad de 2 min), compatible con Threads, funciona desde Render, siempre hay un proveedor disponible |
+| **Canva** (opción B, manual) | Solo si `generate_image` falla por completo (ningún proveedor disponible) o el usuario lo pide expresamente | Editable después, diseños guardados en la cuenta |
 
 La clasificación visual y el prompt (siguiente sección) son **los mismos para ambos**.
 

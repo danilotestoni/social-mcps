@@ -41,15 +41,15 @@ _ENABLED = {
 
 def _image_gen_enabled() -> bool:
     """
-    IMAGE_GEN defaults to auto: enabled only when GEMINI_API_KEY is present,
-    so existing deployments without the key keep working. An explicit
-    ENABLE_IMAGE_GEN=true/false always wins.
+    IMAGE_GEN defaults to enabled: Pollinations.ai needs no credentials, so
+    generate_image always has a working provider even without GEMINI_API_KEY.
+    An explicit ENABLE_IMAGE_GEN=true/false always wins.
     """
     values = env_values(_ENV_PATH)
     raw = values.get("ENABLE_IMAGE_GEN")
     if raw is not None and raw.strip():
         return raw.strip().lower() in _TRUE_VALUES
-    return bool((values.get("GEMINI_API_KEY") or "").strip())
+    return True
 
 
 _ENABLED["IMAGE_GEN"] = _image_gen_enabled()
@@ -113,14 +113,23 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
         )
 
     if _ENABLED["IMAGE_GEN"]:
-        from auth.gemini_auth import GeminiCredentials
+        from auth.gemini_auth import AuthError, GeminiCredentials
         from clients.gemini_client import GeminiImageClient
+        from clients.pollinations_client import PollinationsImageClient
 
-        gemini_env = GeminiCredentials(_ENV_PATH).load()
-        context["gemini"] = GeminiImageClient(
-            gemini_env["GEMINI_API_KEY"],
-            model=env.get("GEMINI_IMAGE_MODEL", "models/gemini-3.1-flash-lite-image"),
-        )
+        context["pollinations"] = PollinationsImageClient()
+
+        try:
+            gemini_env = GeminiCredentials(_ENV_PATH).load()
+            context["gemini"] = GeminiImageClient(
+                gemini_env["GEMINI_API_KEY"],
+                model=env.get("GEMINI_IMAGE_MODEL", "models/gemini-3.1-flash-lite-image"),
+            )
+        except AuthError:
+            _logger.info(
+                "GEMINI_API_KEY not set — generate_image will use Pollinations.ai only."
+            )
+            context["gemini"] = None
 
     yield context
 
@@ -353,7 +362,9 @@ if _ENABLED["IMAGE_GEN"]:
         dry_run: bool = False,
     ) -> dict:
         """
-        Generate an image with Gemini from an English text prompt.
+        Generate an image with Gemini from an English text prompt. Falls back
+        automatically to Pollinations.ai (free, no API key) when Gemini is
+        unavailable or fails, so this tool always has a working provider.
         Returns the local file path and, when WordPress is enabled and
         upload_to_wordpress is true, a public media URL usable directly as
         image_url for Instagram, Facebook, and Threads posts.
@@ -363,12 +374,13 @@ if _ENABLED["IMAGE_GEN"]:
         ctx = mcp.get_context()
         lc = ctx.request_context.lifespan_context
         return await img.generate_image(
-            lc["gemini"],
+            lc.get("gemini"),
             prompt,
             aspect_ratio,
             wordpress_client=lc.get("wordpress"),
             upload_to_wordpress=upload_to_wordpress,
             dry_run=dry_run,
+            pollinations_client=lc.get("pollinations"),
         )
 
 

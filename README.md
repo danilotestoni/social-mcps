@@ -30,15 +30,15 @@ Sistema de automatización de redes sociales mediante MCP servers. Está diseña
 | WordPress.com | `unified-mcp` | `wordpress_publish_post`, `wordpress_get_last_posts`, `wordpress_delete_post`, `wordpress_get_account_info` |
 | X (Twitter) | `unified-mcp` (Twikit) + `social-automation-mcp` (Playwright) | `x_post_tweet` / `post_to_x` |
 | Facebook feed personal | `social-automation-mcp` (Playwright) | `share_to_fb_feed` |
-| Generación de imágenes | `unified-mcp` (Gemini) | `generate_image` |
+| Generación de imágenes | `unified-mcp` (Gemini + Pollinations.ai) | `generate_image` |
 
-### Generación de imágenes con Gemini
+### Generación de imágenes con Gemini + Pollinations.ai (fallback automático)
 
-La tool `generate_image` crea imágenes con **Gemini 3.1 Flash Lite Image** mediante el SDK `google-genai` (API key gratuita en [aistudio.google.com/apikey](https://aistudio.google.com/apikey), variable `GEMINI_API_KEY`). Se activa automáticamente cuando la key está configurada — sin key, la tool no aparece.
+La tool `generate_image` crea imágenes con **Gemini 3.1 Flash Lite Image** mediante el SDK `google-genai` (API key gratuita en [aistudio.google.com/apikey](https://aistudio.google.com/apikey), variable `GEMINI_API_KEY`). Si Gemini no está configurado, falla o agota su cuota, la tool cae automáticamente a **[Pollinations.ai](https://pollinations.ai)**: gratis, sin API key, sin cuenta y sin caducidad, así que `generate_image` siempre tiene un proveedor funcional.
 
 - Acepta un prompt en inglés (puede incluir texto corto a renderizar dentro de la imagen) y `aspect_ratio` (1:1, 16:9, 9:16, etc.)
 - Si WordPress está activado, sube la imagen a su mediateca y devuelve una **URL pública estable**, directamente usable como `image_url` en Instagram, Facebook, LinkedIn y Threads
-- Es el **proveedor de imágenes por defecto** del flujo de `adhoc-publisher`; Canva queda como opción B / fallback (ver su CLAUDE.md, PASO 5)
+- Es el **proveedor de imágenes por defecto** del flujo de `adhoc-publisher`; Canva queda como último fallback manual si `generate_image` falla del todo (ver su CLAUDE.md, PASO 5)
 
 ---
 

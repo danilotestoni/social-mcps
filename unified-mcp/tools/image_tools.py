@@ -4,9 +4,8 @@ import re
 import time
 from pathlib import Path
 
-import httpx
-
-from clients.gemini_client import GeminiAPIError, GeminiImageClient
+from clients.gemini_client import GeminiImageClient
+from clients.pollinations_client import PollinationsImageClient
 from core.logger import get_logger
 from core.models import ToolResult
 
@@ -27,24 +26,39 @@ def _safe_filename(prompt: str, mime_type: str) -> str:
     return f"{slug}-{int(time.time())}.{ext}"
 
 
+async def _try_provider(
+    provider_name: str, prompt: str, aspect_ratio: str, client, errors: list[str]
+) -> tuple[bytes, str] | None:
+    try:
+        return await client.generate_image(prompt, aspect_ratio)
+    except Exception as exc:
+        _logger.warning("%s image generation failed: %s", provider_name, exc)
+        errors.append(f"{provider_name}: {exc}")
+        return None
+
+
 async def generate_image(
-    client: GeminiImageClient,
+    gemini_client: GeminiImageClient | None,
     prompt: str,
     aspect_ratio: str = "1:1",
     wordpress_client=None,
     upload_to_wordpress: bool = True,
     dry_run: bool = False,
+    pollinations_client: PollinationsImageClient | None = None,
 ) -> dict:
     """
-    Generate an image with Gemini and return its local path — plus a public
-    WordPress media URL when a WordPress client is available, so the image
-    can be used directly by Instagram/Facebook/Threads (they require a
-    publicly accessible URL).
+    Generate an image with Gemini (preferred) or Pollinations.ai — a free,
+    keyless provider used as an automatic fallback when Gemini is unavailable
+    or fails (missing key, quota exhausted, API error). Returns the local
+    file path and, when WordPress is enabled and upload_to_wordpress is true,
+    a public media URL usable directly as image_url for Instagram, Facebook,
+    and Threads posts.
     """
     if dry_run:
+        provider = "gemini" if gemini_client is not None else "pollinations"
         return ToolResult(success=True, data={
             "dry_run": True,
-            "platform": "gemini",
+            "platform": provider,
             "payload": {
                 "prompt": prompt,
                 "aspect_ratio": aspect_ratio,
@@ -52,17 +66,25 @@ async def generate_image(
             },
         }).model_dump()
 
-    try:
-        image_bytes, mime_type = await client.generate_image(prompt, aspect_ratio)
-    except GeminiAPIError as exc:
-        return ToolResult(success=False, error=f"Gemini error: {exc}").model_dump()
-    except httpx.HTTPStatusError as exc:
-        return ToolResult(
-            success=False, error=f"Gemini API error: {exc.response.status_code}"
-        ).model_dump()
-    except Exception as exc:
-        _logger.error("Unexpected error generating image: %s", exc)
-        return ToolResult(success=False, error=f"Unexpected error: {exc}").model_dump()
+    errors: list[str] = []
+    result: tuple[bytes, str] | None = None
+    provider: str | None = None
+
+    if gemini_client is not None:
+        result = await _try_provider("Gemini", prompt, aspect_ratio, gemini_client, errors)
+        if result is not None:
+            provider = "gemini"
+
+    if result is None and pollinations_client is not None:
+        result = await _try_provider("Pollinations", prompt, aspect_ratio, pollinations_client, errors)
+        if result is not None:
+            provider = "pollinations"
+
+    if result is None:
+        error_detail = "; ".join(errors) if errors else "No image provider configured."
+        return ToolResult(success=False, error=error_detail).model_dump()
+
+    image_bytes, mime_type = result
 
     filename = _safe_filename(prompt, mime_type)
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -74,8 +96,10 @@ async def generate_image(
         "local_path": str(local_path),
         "mime_type": mime_type,
         "size_bytes": len(image_bytes),
-        "provider": "gemini",
+        "provider": provider,
     }
+    if errors:
+        data["fallback_reason"] = errors[0]
 
     if upload_to_wordpress and wordpress_client is not None:
         try:

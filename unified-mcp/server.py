@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 _ENV_PATH = Path(__file__).parent / ".env"
 load_dotenv(_ENV_PATH)
@@ -134,7 +135,29 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     yield context
 
 
-mcp = FastMCP("social-unified", lifespan=lifespan)
+def _transport_security() -> TransportSecuritySettings:
+    """
+    DNS-rebinding protection. Defaults to loopback-only, matching FastMCP's
+    own default. Set MCP_ALLOWED_HOSTS (comma-separated Host header values,
+    e.g. the Cloud Run service domain) to allow the server to be reached
+    through its public hostname; access is still gated by MCP_AUTH_TOKEN
+    via BearerAuthMiddleware below.
+    """
+    hosts = [h.strip() for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    if not hosts:
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
+            allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+        )
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[],
+    )
+
+
+mcp = FastMCP("social-unified", lifespan=lifespan, transport_security=_transport_security())
 
 
 # ── LinkedIn ─────────────────────────────────────────────────────────────────

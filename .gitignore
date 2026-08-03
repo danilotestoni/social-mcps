@@ -42,3 +42,7 @@ Stock_IMAGES/Geometric financial growth pattern made of glowing circuit lines.pn
 Stock_IMAGES/Google entierra Gemini CLI.png
 Stock_IMAGES/Modern digital pipeline.png
 Stock_IMAGES/Stylized power grid lines and electrical substations merging with abstract data center silhouettes.png
+# Cloudflare Workers / Node dependencies
+**/node_modules/
+**/.wrangler/
+**/.dev.vars

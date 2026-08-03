@@ -42,8 +42,9 @@ _ENABLED = {
 
 def _image_gen_enabled() -> bool:
     """
-    IMAGE_GEN defaults to enabled: Pollinations.ai needs no credentials, so
-    generate_image always has a working provider even without GEMINI_API_KEY.
+    IMAGE_GEN defaults to enabled: all three providers (Cloudflare Workers
+    AI, Hugging Face FLUX.1-schnell, Pollinations.ai) are free and need no
+    credentials, so generate_image always has a working provider.
     An explicit ENABLE_IMAGE_GEN=true/false always wins.
     """
     values = env_values(_ENV_PATH)
@@ -114,23 +115,21 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
         )
 
     if _ENABLED["IMAGE_GEN"]:
-        from auth.gemini_auth import AuthError, GeminiCredentials
-        from clients.gemini_client import GeminiImageClient
+        from clients.cloudflare_worker_image_client import CloudflareWorkerImageClient
+        from clients.huggingface_flux_client import HuggingFaceFluxClient
         from clients.pollinations_client import PollinationsImageClient
 
+        # Free-tier fallback chain, all keyless: Cloudflare Workers AI first
+        # (no per-image cost to us), then the Hugging Face FLUX.1-schnell
+        # Space, then Pollinations.ai as the last resort.
+        context["cloudflare_image"] = CloudflareWorkerImageClient(
+            base_url=env.get(
+                "CLOUDFLARE_IMAGE_WORKER_URL",
+                "https://image-burn.danilo-testoni.workers.dev",
+            )
+        )
+        context["huggingface_image"] = HuggingFaceFluxClient()
         context["pollinations"] = PollinationsImageClient()
-
-        try:
-            gemini_env = GeminiCredentials(_ENV_PATH).load()
-            context["gemini"] = GeminiImageClient(
-                gemini_env["GEMINI_API_KEY"],
-                model=env.get("GEMINI_IMAGE_MODEL", "models/gemini-3.1-flash-lite-image"),
-            )
-        except AuthError:
-            _logger.info(
-                "GEMINI_API_KEY not set — generate_image will use Pollinations.ai only."
-            )
-            context["gemini"] = None
 
     yield context
 
@@ -158,6 +157,23 @@ def _transport_security() -> TransportSecuritySettings:
 
 
 mcp = FastMCP("social-unified", lifespan=lifespan, transport_security=_transport_security())
+
+
+@mcp.tool()
+def list_enabled_platforms() -> dict:
+    """
+    Lists which social platforms/tools are active on this deployment and
+    which are disabled. Configured at deploy time via ENABLE_<PLATFORM>
+    environment variables (LINKEDIN, FACEBOOK, INSTAGRAM, THREADS,
+    WORDPRESS, X, FB_SHARE, IMAGE_GEN) — call this before publishing
+    anything if you're unsure which networks a request could reach.
+    Disabled platforms register no tools at all, so this only reports the
+    current state; it does not change it.
+    """
+    return {
+        "enabled": sorted(k for k, v in _ENABLED.items() if v),
+        "disabled": sorted(k for k, v in _ENABLED.items() if not v),
+    }
 
 
 # ── LinkedIn ─────────────────────────────────────────────────────────────────
@@ -372,7 +388,7 @@ if _ENABLED["FB_SHARE"]:
         return await fb_share.share_to_fb_feed(post_url, message, dry_run)
 
 
-# ── Image generation (Gemini) ─────────────────────────────────────────────────
+# ── Image generation ──────────────────────────────────────────────────────────
 
 if _ENABLED["IMAGE_GEN"]:
     import tools.image_tools as img
@@ -381,30 +397,40 @@ if _ENABLED["IMAGE_GEN"]:
     async def generate_image(
         prompt: str,
         aspect_ratio: str = "1:1",
-        upload_to_wordpress: bool = True,
+        upload_to_wordpress: bool = False,
         dry_run: bool = False,
-    ) -> dict:
+    ):
         """
-        Generate an image with Gemini from an English text prompt. Falls back
-        automatically to Pollinations.ai (free, no API key) when Gemini is
-        unavailable or fails, so this tool always has a working provider.
-        Returns the local file path and, when WordPress is enabled and
-        upload_to_wordpress is true, a public media URL usable directly as
-        image_url for Instagram, Facebook, and Threads posts.
-        Aspect ratios: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9.
+        Generate an image from an English text prompt. Tries providers in
+        order — Cloudflare Workers AI (FLUX-1-schnell) first, then the
+        Hugging Face FLUX.1-schnell Space, then Pollinations.ai — all free,
+        so this tool always has a working provider.
+        Shows the generated image inline in the chat. Set upload_to_wordpress
+        to true only when the image needs a public media URL for a follow-up
+        cross-post (e.g. Instagram/Threads, which require image_url rather
+        than a local file) — a plain "generate an image" request should NOT
+        touch WordPress.
+        Aspect ratios: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9
+        (Cloudflare/Hugging Face currently ignore this and always produce a
+        square image; Pollinations honors it).
         The prompt can include short text to render inside the image.
         """
         ctx = mcp.get_context()
         lc = ctx.request_context.lifespan_context
-        return await img.generate_image(
-            lc.get("gemini"),
+        data, preview_content = await img.generate_image(
             prompt,
             aspect_ratio,
+            cloudflare_client=lc.get("cloudflare_image"),
+            huggingface_client=lc.get("huggingface_image"),
+            pollinations_client=lc.get("pollinations"),
             wordpress_client=lc.get("wordpress"),
             upload_to_wordpress=upload_to_wordpress,
             dry_run=dry_run,
-            pollinations_client=lc.get("pollinations"),
         )
+
+        if preview_content is None:
+            return data
+        return [data, preview_content]
 
 
 # ── HTTP auth (public deployments) ────────────────────────────────────────────

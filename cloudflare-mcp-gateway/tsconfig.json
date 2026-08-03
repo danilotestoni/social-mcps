@@ -5,8 +5,9 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
-    "lib": ["ES2022", "DOM"],
-    "types": ["vitest/globals"]
+    "skipLibCheck": true,
+    "lib": ["ES2022"],
+    "types": ["vitest/globals", "@cloudflare/workers-types"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

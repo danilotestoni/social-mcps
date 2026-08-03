@@ -30,6 +30,50 @@ function isConfigured(env: GatewayEnv): boolean {
   );
 }
 
+type UpstreamEnv = Pick<GatewayEnv, "UPSTREAM_MCP_URL" | "UPSTREAM_MCP_AUTH_TOKEN">;
+
+/**
+ * Forwards an already-authorized request to the upstream Cloud Run MCP
+ * server. Shared by the legacy static-bearer /mcp path and the
+ * OAuth-protected apiHandler — callers are responsible for authorizing
+ * the request before calling this.
+ */
+export async function proxyToUpstream(
+  request: Request,
+  env: UpstreamEnv,
+  fetchImpl: FetchLike = fetch,
+): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "POST" && request.method !== "DELETE") {
+    return jsonError("Method not allowed", 405);
+  }
+
+  const requestUrl = new URL(request.url);
+  const upstreamUrl = new URL(env.UPSTREAM_MCP_URL);
+  upstreamUrl.search = requestUrl.search;
+
+  const headers = new Headers();
+  for (const name of FORWARDED_HEADERS) {
+    const value = request.headers.get(name);
+    if (value !== null) {
+      headers.set(name, value);
+    }
+  }
+  headers.set("authorization", `Bearer ${env.UPSTREAM_MCP_AUTH_TOKEN}`);
+
+  const init: RequestInit & { duplex?: "half" } = {
+    method: request.method,
+    headers,
+    redirect: "manual",
+  };
+
+  if (request.method !== "GET") {
+    init.body = request.body;
+    init.duplex = "half";
+  }
+
+  return fetchImpl(upstreamUrl.toString(), init);
+}
+
 export function createProxyHandler(fetchImpl: FetchLike = fetch) {
   return async (request: Request, env: GatewayEnv): Promise<Response> => {
     if (!isConfigured(env)) {
@@ -41,38 +85,11 @@ export function createProxyHandler(fetchImpl: FetchLike = fetch) {
       return jsonError("Not found", 404);
     }
 
-    if (request.method !== "GET" && request.method !== "POST" && request.method !== "DELETE") {
-      return jsonError("Method not allowed", 405);
-    }
-
     if (request.headers.get("authorization") !== `Bearer ${env.MCP_CLIENT_TOKEN}`) {
       return jsonError("Unauthorized", 401);
     }
 
-    const upstreamUrl = new URL(env.UPSTREAM_MCP_URL);
-    upstreamUrl.search = requestUrl.search;
-
-    const headers = new Headers();
-    for (const name of FORWARDED_HEADERS) {
-      const value = request.headers.get(name);
-      if (value !== null) {
-        headers.set(name, value);
-      }
-    }
-    headers.set("authorization", `Bearer ${env.UPSTREAM_MCP_AUTH_TOKEN}`);
-
-    const init: RequestInit & { duplex?: "half" } = {
-      method: request.method,
-      headers,
-      redirect: "manual",
-    };
-
-    if (request.method !== "GET") {
-      init.body = request.body;
-      init.duplex = "half";
-    }
-
-    return fetchImpl(upstreamUrl.toString(), init);
+    return proxyToUpstream(request, env, fetchImpl);
   };
 }
 

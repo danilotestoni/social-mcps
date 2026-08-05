@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 
 from clients.instagram_client import InstagramAPIError, InstagramClient
+from core.errors import describe_exception as _describe
 from core.logger import get_logger
 from core.models import ToolResult
 
@@ -21,6 +22,7 @@ async def publish_post(
     image_url: str | None = None,
     image_path: str | None = None,
     dry_run: bool = False,
+    on_progress=None,
 ) -> dict:
     if image_path:
         return ToolResult(success=False, error=_LOCAL_FILE_ERROR).model_dump()
@@ -36,7 +38,7 @@ async def publish_post(
             "payload": {"caption": caption, "image_url": image_url, "media_type": "IMAGE"},
         }).model_dump()
     try:
-        media_id = await client.publish_photo(image_url, caption)
+        media_id = await client.publish_photo(image_url, caption, on_progress=on_progress)
         return ToolResult(success=True, data={"media_id": media_id}).model_dump()
     except httpx.HTTPStatusError as exc:
         _logger.error("Instagram API error in publish_post: %s", exc.response.text)
@@ -45,10 +47,10 @@ async def publish_post(
         ).model_dump()
     except InstagramAPIError as exc:
         _logger.error("Instagram container error in publish_post: %s", exc)
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=_describe(exc)).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in publish_post")
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=_describe(exc)).model_dump()
 
 
 async def get_last_posts(client: InstagramClient, count: int = 10) -> dict:
@@ -62,7 +64,7 @@ async def get_last_posts(client: InstagramClient, count: int = 10) -> dict:
         ).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in get_last_posts")
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=_describe(exc)).model_dump()
 
 
 async def delete_post(client: InstagramClient, media_id: str) -> dict:
@@ -76,7 +78,7 @@ async def delete_post(client: InstagramClient, media_id: str) -> dict:
         ).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in delete_post")
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=_describe(exc)).model_dump()
 
 
 async def get_account_info(client: InstagramClient) -> dict:
@@ -90,4 +92,4 @@ async def get_account_info(client: InstagramClient) -> dict:
         ).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in get_account_info")
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=_describe(exc)).model_dump()

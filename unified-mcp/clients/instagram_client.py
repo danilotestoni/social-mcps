@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Awaitable, Callable
 
 import httpx
 
 from auth.instagram_auth import InstagramTokenManager
 from core.logger import get_logger
 from core.models import InstagramAccountInfo, MediaItem
-from core.retry import _retried, _retried_publish
+from core.retry import _retried, _retried_publish, _retried_with_timeout
+
+ProgressCallback = Callable[[str], Awaitable[None]]
 
 _BASE_URL = "https://graph.facebook.com/v21.0"
 _CONTAINER_POLL_INTERVAL = 3   # seconds between status checks
 _CONTAINER_POLL_MAX = 20       # max polling attempts (~60s total)
+
+# httpx's default timeout (5s) is too short for /media: Meta fetches
+# image_url itself as part of processing that call, and that round-trip
+# (Meta -> our /temp-image/ proxy -> GCS -> back) can take a while.
+_TIMEOUT = httpx.Timeout(60.0)
 
 
 class InstagramAPIError(Exception):
@@ -43,7 +51,7 @@ class InstagramClient:
     @_retried
     async def get_account_info(self) -> InstagramAccountInfo:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"/{self._account_id}",
                 params={"fields": "id,username,name,followers_count,media_count"},
@@ -62,7 +70,7 @@ class InstagramClient:
     @_retried
     async def get_media(self, count: int = 10) -> list[MediaItem]:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"/{self._account_id}/media",
                 params={
@@ -88,14 +96,14 @@ class InstagramClient:
     @_retried
     async def delete_media(self, media_id: str) -> None:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.delete(f"/{media_id}", headers=headers)
         self._raise_for_status(response)
 
-    @_retried
+    @_retried_with_timeout
     async def _create_image_container(self, image_url: str, caption: str) -> str:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/{self._account_id}/media",
                 params={"image_url": image_url, "caption": caption},
@@ -104,10 +112,12 @@ class InstagramClient:
         self._raise_for_status(response)
         return response.json()["id"]
 
-    async def _wait_for_container(self, container_id: str) -> None:
+    async def _wait_for_container(
+        self, container_id: str, on_progress: ProgressCallback | None = None
+    ) -> None:
         headers = await self._auth_headers()
         for attempt in range(_CONTAINER_POLL_MAX):
-            async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+            async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
                 response = await client.get(
                     f"/{container_id}",
                     params={"fields": "status_code"},
@@ -125,6 +135,11 @@ class InstagramClient:
                 "Container %s status: %s (attempt %d/%d)",
                 container_id, status, attempt + 1, _CONTAINER_POLL_MAX,
             )
+            if on_progress is not None:
+                await on_progress(
+                    f"Instagram is still processing the image "
+                    f"(attempt {attempt + 1}/{_CONTAINER_POLL_MAX})..."
+                )
             await asyncio.sleep(_CONTAINER_POLL_INTERVAL)
         raise InstagramAPIError(
             f"Container {container_id} did not reach FINISHED status after "
@@ -134,7 +149,7 @@ class InstagramClient:
     @_retried_publish
     async def _publish_container(self, container_id: str) -> str:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/{self._account_id}/media_publish",
                 params={"creation_id": container_id},
@@ -143,10 +158,16 @@ class InstagramClient:
         self._raise_for_status(response)
         return response.json()["id"]
 
-    async def publish_photo(self, image_url: str, caption: str) -> str:
+    async def publish_photo(
+        self, image_url: str, caption: str, on_progress: ProgressCallback | None = None
+    ) -> str:
+        if on_progress is not None:
+            await on_progress("Creating the Instagram media container...")
         container_id = await self._create_image_container(image_url, caption)
         self._logger.debug("Media container created: %s", container_id)
-        await self._wait_for_container(container_id)
+        await self._wait_for_container(container_id, on_progress)
+        if on_progress is not None:
+            await on_progress("Publishing...")
         media_id = await self._publish_container(container_id)
         self._logger.info("Post published successfully: %s", media_id)
         return media_id

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import os
 import sys
 import time
@@ -315,3 +316,76 @@ class GcsTempStorageToolsTests(TestCase):
 
         self.assertTrue(result["success"])
         self.assertTrue(result["data"]["deleted"])
+
+
+class AutoOptimizeTests(TestCase):
+    def _make_fake_client(self):
+        client = MagicMock()
+        captured = {}
+
+        async def upload_temp_image(data, mime_type, filename=None, ttl_seconds=900):
+            captured["data"] = data
+            captured["mime_type"] = mime_type
+            return {
+                "object_name": "tmp/fake.jpg",
+                "bucket": "fake-bucket",
+                "signed_url": "https://unified-mcp.example.run.app/temp-image/abc.def",
+                "public_url": "https://unified-mcp.example.run.app/temp-image/abc.def",
+                "mime_type": mime_type,
+                "size_bytes": len(data),
+                "expires_at": "2026-01-01T00:00:00+00:00",
+            }
+
+        client.upload_temp_image.side_effect = upload_temp_image
+        return client, captured
+
+    def _make_noisy_png(self, size):
+        import random
+
+        from PIL import Image as PILImage
+
+        rng = random.Random(0)
+        width, height = size
+        pixel_data = bytes(rng.getrandbits(8) for _ in range(width * height * 3))
+        buffer = io.BytesIO()
+        PILImage.frombytes("RGB", size, pixel_data).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_small_image_is_uploaded_untouched(self) -> None:
+        client, captured = self._make_fake_client()
+        small_png = base64.b64encode(b"tiny-fake-png-bytes").decode()
+
+        result = asyncio.run(gcs_tools.upload_temp_image(client, image_base64=small_png))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["data"], b"tiny-fake-png-bytes")
+        self.assertEqual(captured["mime_type"], "image/jpeg")
+
+    def test_large_image_gets_downscaled_and_reencoded(self) -> None:
+        client, captured = self._make_fake_client()
+        large_png = self._make_noisy_png((900, 900))
+        self.assertGreater(len(large_png), gcs_tools._AUTO_OPTIMIZE_THRESHOLD_BYTES)
+        raw = base64.b64encode(large_png).decode()
+
+        result = asyncio.run(
+            gcs_tools.upload_temp_image(client, image_base64=raw, mime_type="image/png")
+        )
+
+        self.assertTrue(result["success"])
+        self.assertLess(len(captured["data"]), len(large_png))
+        self.assertEqual(captured["mime_type"], "image/jpeg")
+
+    def test_auto_optimize_false_uploads_original_bytes(self) -> None:
+        client, captured = self._make_fake_client()
+        large_png = self._make_noisy_png((900, 900))
+        raw = base64.b64encode(large_png).decode()
+
+        result = asyncio.run(
+            gcs_tools.upload_temp_image(
+                client, image_base64=raw, mime_type="image/png", auto_optimize=False
+            )
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(captured["data"], large_png)
+        self.assertEqual(captured["mime_type"], "image/png")

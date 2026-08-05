@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import io
 import re
 
 import httpx
 
 from clients.gcs_temp_storage_client import GCSTempStorageClient, GCSTempStorageError
+from core.errors import describe_exception
 from core.logger import get_logger
 from core.models import ToolResult
 
@@ -24,6 +26,15 @@ _DATA_URI_RE = re.compile(r"^data:(?P<mime>[\w./+-]+);base64,(?P<b64>.+)$", re.D
 _MAX_BASE64_DECODED_BYTES = 4 * 1024 * 1024  # 4 MB
 _MAX_URL_FETCH_BYTES = 20 * 1024 * 1024  # 20 MB
 _URL_FETCH_TIMEOUT = 30.0
+
+# Auto-optimization: images above this size or dimension get downscaled and
+# re-encoded as JPEG before upload — keeps bucket usage lean and stays
+# comfortably within every target platform's own limits (Instagram, etc.).
+# Best-effort only: if this fails for any reason, the original bytes are
+# uploaded as-is rather than failing the whole operation.
+_AUTO_OPTIMIZE_THRESHOLD_BYTES = 1_500_000  # 1.5 MB
+_AUTO_OPTIMIZE_MAX_DIMENSION = 1600
+_AUTO_OPTIMIZE_JPEG_QUALITY = 85
 
 
 def _decode_image_base64(image_base64: str, default_mime_type: str) -> tuple[bytes, str]:
@@ -89,6 +100,34 @@ async def _fetch_image_url(image_url: str, default_mime_type: str) -> tuple[byte
     return data, mime_type
 
 
+def _maybe_optimize(data: bytes, mime_type: str) -> tuple[bytes, str]:
+    """
+    Downscales and re-encodes as JPEG when the image is larger than
+    reasonable for a temp upload — best-effort, never raises: any failure
+    just falls back to the original bytes untouched.
+    """
+    if len(data) <= _AUTO_OPTIMIZE_THRESHOLD_BYTES:
+        return data, mime_type
+
+    try:
+        from PIL import Image as PILImage
+
+        with PILImage.open(io.BytesIO(data)) as pil_image:
+            if max(pil_image.size) <= _AUTO_OPTIMIZE_MAX_DIMENSION and mime_type == "image/jpeg":
+                return data, mime_type
+            pil_image = pil_image.convert("RGB")
+            pil_image.thumbnail((_AUTO_OPTIMIZE_MAX_DIMENSION, _AUTO_OPTIMIZE_MAX_DIMENSION))
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format="JPEG", quality=_AUTO_OPTIMIZE_JPEG_QUALITY)
+            optimized = buffer.getvalue()
+    except Exception as exc:
+        _logger.warning("Could not auto-optimize image, uploading as-is: %s", exc)
+        return data, mime_type
+
+    _logger.info("Auto-optimized image from %d to %d bytes.", len(data), len(optimized))
+    return optimized, "image/jpeg"
+
+
 async def upload_temp_image(
     client: GCSTempStorageClient,
     image_base64: str | None = None,
@@ -96,6 +135,7 @@ async def upload_temp_image(
     mime_type: str = "image/jpeg",
     filename: str | None = None,
     ttl_seconds: int = 900,
+    auto_optimize: bool = True,
 ) -> dict:
     if not image_base64 and not image_url:
         return ToolResult(
@@ -112,18 +152,22 @@ async def upload_temp_image(
             data, resolved_mime_type = await _fetch_image_url(image_url, mime_type)
         else:
             data, resolved_mime_type = _decode_image_base64(image_base64, mime_type)
+
+        if auto_optimize:
+            data, resolved_mime_type = _maybe_optimize(data, resolved_mime_type)
+
         result = await client.upload_temp_image(
             data, resolved_mime_type, filename=filename, ttl_seconds=ttl_seconds
         )
         return ToolResult(success=True, data=result).model_dump()
     except ValueError as exc:
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
     except GCSTempStorageError as exc:
         _logger.error("GCS temp storage config error in upload_temp_image: %s", exc)
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in upload_temp_image")
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
 
 
 async def delete_temp_image(client: GCSTempStorageClient, object_name: str) -> dict:
@@ -132,4 +176,4 @@ async def delete_temp_image(client: GCSTempStorageClient, object_name: str) -> d
         return ToolResult(success=True, data=result).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in delete_temp_image")
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()

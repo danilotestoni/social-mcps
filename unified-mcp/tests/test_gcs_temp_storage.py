@@ -55,17 +55,26 @@ def _fake_blob(store: dict, name: str):
 
 
 class GCSTempStorageClientTests(TestCase):
-    def _make_client_with_fake_storage(self, credentials):
+    def _make_client_with_fake_storage(self, signing_credentials):
         store: dict = {}
         fake_bucket = MagicMock()
         fake_bucket.blob.side_effect = lambda name: _fake_blob(store, name)
 
         fake_storage_client = MagicMock()
-        fake_storage_client._credentials = credentials
         fake_storage_client.bucket.return_value = fake_bucket
 
         client = GCSTempStorageClient("fake-bucket")
         client._client = fake_storage_client
+
+        # google.auth.default() is called fresh (with cloud-platform scope)
+        # for signing, independently of the storage client's own credentials.
+        patcher = patch(
+            "clients.gcs_temp_storage_client.google.auth.default",
+            return_value=(signing_credentials, "fake-project"),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         return client, store
 
     def test_upload_with_local_service_account_key_signs_directly(self) -> None:

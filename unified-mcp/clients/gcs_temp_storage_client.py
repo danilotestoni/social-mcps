@@ -6,6 +6,7 @@ import mimetypes
 import uuid
 from typing import Any
 
+import google.auth
 from google.auth.credentials import Signing
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.cloud import storage
@@ -15,6 +16,11 @@ from core.logger import get_logger
 
 _OBJECT_PREFIX = "tmp"
 _MAX_TTL_SECONDS = 7 * 24 * 3600  # 604800s — GCS's own V4 signed URL ceiling
+
+# storage.Client()'s own credentials carry storage-only scopes, which the
+# IAM signBlob call rejects with "insufficient authentication scopes" — the
+# signing delegation needs its own, separately-scoped credentials.
+_SIGNING_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
 
 class GCSTempStorageError(Exception):
@@ -46,7 +52,7 @@ class GCSTempStorageClient:
             self._client = storage.Client()
         return self._client
 
-    def _signing_kwargs(self, client: storage.Client) -> dict[str, Any]:
+    def _signing_kwargs(self) -> dict[str, Any]:
         """
         google-cloud-storage can only sign directly when the active
         credentials carry a private key (e.g. a service-account JSON key
@@ -58,8 +64,12 @@ class GCSTempStorageClient:
         without a key file. Requires the "Service Account Token Creator"
         role (roles/iam.serviceAccountTokenCreator) granted to the service
         account on itself.
+
+        Fetches its own credentials (scoped to cloud-platform) rather than
+        reusing the storage client's — those carry storage-only scopes,
+        which the IAM signBlob call rejects as insufficient.
         """
-        credentials = client._credentials
+        credentials, _project = google.auth.default(scopes=_SIGNING_SCOPES)
         if isinstance(credentials, Signing):
             return {}
 
@@ -103,7 +113,7 @@ class GCSTempStorageClient:
             version="v4",
             expiration=expiration,
             method="GET",
-            **self._signing_kwargs(client),
+            **self._signing_kwargs(),
         )
         expires_at = (datetime.datetime.now(datetime.timezone.utc) + expiration).isoformat()
 

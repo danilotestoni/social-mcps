@@ -11,6 +11,9 @@ from core.models import FacebookPostItem, PageInfo
 from core.retry import _retried, _retried_publish
 
 _BASE_URL = "https://graph.facebook.com/v21.0"
+# httpx's default timeout (5s) is too short for photo-by-URL posts: Meta
+# fetches image_url itself as part of processing that call.
+_TIMEOUT = httpx.Timeout(60.0)
 
 
 class FacebookClient:
@@ -38,7 +41,7 @@ class FacebookClient:
     @_retried
     async def get_page_info(self) -> PageInfo:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"/{self._page_id}",
                 params={"fields": "id,name,category,fan_count,followers_count"},
@@ -57,7 +60,7 @@ class FacebookClient:
     @_retried
     async def get_posts(self, count: int = 10) -> list[FacebookPostItem]:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"/{self._page_id}/posts",
                 params={
@@ -83,14 +86,14 @@ class FacebookClient:
     @_retried
     async def delete_post(self, post_id: str) -> None:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.delete(f"/{post_id}", headers=headers)
         self._raise_for_status(response)
 
     @_retried_publish
     async def publish_text_post(self, message: str) -> str:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/{self._page_id}/feed",
                 json={"message": message},
@@ -102,7 +105,7 @@ class FacebookClient:
     @_retried_publish
     async def publish_photo_url(self, image_url: str, caption: str) -> str:
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/{self._page_id}/photos",
                 json={"url": image_url, "caption": caption},
@@ -118,7 +121,7 @@ class FacebookClient:
         image_bytes = Path(image_path).read_bytes()
         filename = Path(image_path).name
         content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/{self._page_id}/photos",
                 data={"caption": caption},

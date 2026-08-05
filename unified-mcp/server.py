@@ -209,6 +209,8 @@ if _ENABLED["LINKEDIN"]:
     ) -> dict:
         """Publish a post to LinkedIn. Supports plain text or image (URL or local path)."""
         ctx = mcp.get_context()
+        if not dry_run:
+            await ctx.report_progress(0, 100, "Publishing to LinkedIn...")
         lc = ctx.request_context.lifespan_context
         return await li.publish_post(lc["linkedin"], lc["linkedin_person_urn"], text, image_url, image_path, dry_run)
 
@@ -246,6 +248,8 @@ if _ENABLED["FACEBOOK"]:
     ) -> dict:
         """Publish a post to the Facebook Page. Supports text, image URL, or local image file."""
         ctx = mcp.get_context()
+        if not dry_run:
+            await ctx.report_progress(0, 100, "Publishing to Facebook...")
         return await fb.publish_post(ctx.request_context.lifespan_context["facebook"], message, image_url, image_path, dry_run)
 
     @mcp.tool()
@@ -280,7 +284,26 @@ if _ENABLED["INSTAGRAM"]:
     ) -> dict:
         """Publish a photo post to Instagram. Requires a public image URL."""
         ctx = mcp.get_context()
-        return await ig.publish_post(ctx.request_context.lifespan_context["instagram"], caption, image_url, None, dry_run)
+        if dry_run:
+            return await ig.publish_post(
+                ctx.request_context.lifespan_context["instagram"], caption, image_url, None, dry_run
+            )
+
+        await ctx.report_progress(0, 100, "Publishing to Instagram...")
+        _step = {"n": 0}
+
+        async def _on_progress(message: str) -> None:
+            _step["n"] += 1
+            await ctx.report_progress(min(_step["n"] * 5, 95), 100, message)
+
+        return await ig.publish_post(
+            ctx.request_context.lifespan_context["instagram"],
+            caption,
+            image_url,
+            None,
+            dry_run,
+            on_progress=_on_progress,
+        )
 
     @mcp.tool()
     async def instagram_get_last_posts(count: int = 10) -> dict:
@@ -314,6 +337,8 @@ if _ENABLED["THREADS"]:
     ) -> dict:
         """Publish a thread to Threads. Optionally include a public image URL."""
         ctx = mcp.get_context()
+        if not dry_run:
+            await ctx.report_progress(0, 100, "Publishing to Threads...")
         return await th.publish_post(ctx.request_context.lifespan_context["threads"], text, image_url, dry_run)
 
     @mcp.tool()
@@ -351,6 +376,8 @@ if _ENABLED["WORDPRESS"]:
     ) -> dict:
         """Publish a post to WordPress.com. Optionally include a featured image."""
         ctx = mcp.get_context()
+        if not dry_run:
+            await ctx.report_progress(0, 100, "Publishing to WordPress...")
         return await wp.publish_post(ctx.request_context.lifespan_context["wordpress"], title, content, status, image_url, image_path, dry_run)
 
     @mcp.tool()
@@ -435,6 +462,8 @@ if _ENABLED["IMAGE_GEN"]:
         The prompt can include short text to render inside the image.
         """
         ctx = mcp.get_context()
+        if not dry_run:
+            await ctx.report_progress(0, 100, "Generating image...")
         lc = ctx.request_context.lifespan_context
         data, preview_content = await img.generate_image(
             prompt,
@@ -464,6 +493,7 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         mime_type: str = "image/jpeg",
         filename: str | None = None,
         ttl_seconds: int = 900,
+        auto_optimize: bool = True,
     ) -> dict:
         """
         Uploads an image (e.g. one attached or created directly in the
@@ -473,23 +503,40 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         publishing tool that requires a public URL rather than a local
         file.
         Provide exactly ONE of:
-          - image_url: a URL the server fetches directly (PREFERRED —
-            avoids transporting the image bytes through the tool call at
-            all). Use this whenever the image is already reachable at a
-            URL, or when image_base64 has failed with a decode/corruption
-            error — large base64 payloads (roughly >1-2MB) are unreliable
-            through some MCP clients.
+          - image_url: a URL the server fetches directly. STRONGLY
+            PREFERRED whenever the image is already reachable at a URL —
+            it avoids transporting any image bytes through the tool call
+            at all, which is the fragile part.
           - image_base64: a plain base64 string or a data URI
-            (data:image/png;base64,...). Capped at 4MB decoded; above
-            that, or if it keeps failing to decode, switch to image_url.
+            (data:image/png;base64,...). Only for genuinely local files
+            with no URL (e.g. an attachment from the user). Keep the
+            underlying FILE under ~50KB if at all possible — large base64
+            payloads have been observed getting corrupted or truncated by
+            some MCP clients well before reaching our 4MB server-side
+            cap (failures seen in the 100-130KB base64 range; a tiny
+            ~12KB payload went through fine). If it fails, shrink the
+            image further (lower resolution and/or JPEG quality) and
+            retry, or find/produce a URL for it instead.
+        auto_optimize (default true): if the received image is large
+        (>1.5MB or a large resolution), it's automatically downscaled and
+        re-encoded as JPEG before upload — keeps things fast and within
+        every platform's limits. Set to false to upload the exact original
+        bytes untouched.
         Call delete_temp_image once you're done publishing — don't rely
         on ttl_seconds/the bucket's cleanup rule for prompt deletion,
         those are just safety nets. ttl_seconds defaults to 900 (15 min).
         """
         ctx = mcp.get_context()
+        await ctx.report_progress(0, 100, "Uploading image to temporary storage...")
         lc = ctx.request_context.lifespan_context
         return await gcs_tmp.upload_temp_image(
-            lc["gcs_temp_storage"], image_base64, image_url, mime_type, filename, ttl_seconds
+            lc["gcs_temp_storage"],
+            image_base64,
+            image_url,
+            mime_type,
+            filename,
+            ttl_seconds,
+            auto_optimize,
         )
 
     @mcp.tool()

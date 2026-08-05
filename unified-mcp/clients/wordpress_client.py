@@ -11,6 +11,8 @@ from core.models import SiteInfo, WPPostItem
 from core.retry import _retried, _retried_publish
 
 _BASE_URL = "https://public-api.wordpress.com/rest/v1.1"
+# httpx's default timeout (5s) is too short for media uploads/URL fetches.
+_TIMEOUT = httpx.Timeout(60.0)
 
 
 class WordPressClient:
@@ -31,7 +33,7 @@ class WordPressClient:
 
     @_retried
     async def get_site_info(self) -> SiteInfo:
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"/sites/{self._site_id}",
                 headers=self._headers(),
@@ -48,7 +50,7 @@ class WordPressClient:
 
     @_retried
     async def get_posts(self, count: int = 10) -> list[WPPostItem]:
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"/sites/{self._site_id}/posts/",
                 headers=self._headers(),
@@ -75,7 +77,7 @@ class WordPressClient:
     @_retried
     async def delete_post(self, post_id: int) -> None:
         # WordPress.com REST API uses POST /{post_id}/delete, not HTTP DELETE
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/sites/{self._site_id}/posts/{post_id}/delete",
                 headers=self._headers(),
@@ -84,7 +86,7 @@ class WordPressClient:
 
     async def _upload_media_bytes(self, data: bytes, filename: str) -> int:
         content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/sites/{self._site_id}/media/new",
                 headers=self._headers(),
@@ -104,7 +106,7 @@ class WordPressClient:
     async def upload_media_get_url(self, data: bytes, filename: str) -> dict:
         """Upload media bytes and return {'id': int, 'url': str} with the public URL."""
         content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/sites/{self._site_id}/media/new",
                 headers=self._headers(),
@@ -117,7 +119,7 @@ class WordPressClient:
         return {"id": media_items[0]["ID"], "url": media_items[0].get("URL", "")}
 
     async def upload_media_from_url(self, image_url: str) -> int:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(image_url, timeout=30.0)
             response.raise_for_status()
             image_bytes = response.content
@@ -135,7 +137,7 @@ class WordPressClient:
         body: dict = {"title": title, "content": content, "status": status}
         if featured_media_id is not None:
             body["featured_image"] = featured_media_id
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/sites/{self._site_id}/posts/new",
                 headers=self._headers(),

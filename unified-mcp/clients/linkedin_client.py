@@ -11,6 +11,8 @@ from core.retry import _retried, _retried_publish
 
 _BASE_URL = "https://api.linkedin.com"
 _API_VERSION = "202401"
+# httpx's default timeout (5s) is too short for image uploads/URL fetches.
+_TIMEOUT = httpx.Timeout(60.0)
 
 
 class LinkedInAPIError(Exception):
@@ -41,7 +43,7 @@ class LinkedInClient:
     @_retried
     async def get_profile(self) -> ProfileInfo:
         headers = await self._headers()
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.get("/v2/userinfo", headers=headers)
         self._raise_for_status(response)
         data = response.json()
@@ -66,7 +68,7 @@ class LinkedInClient:
         # The URN itself must be encoded, the parentheses must not.
         encoded_urn = urllib.parse.quote(person_urn, safe="")
         url = f"/v2/ugcPosts?q=authors&authors=List({encoded_urn})&count={count}"
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
         self._raise_for_status(response)
         elements = response.json().get("elements", [])
@@ -91,7 +93,7 @@ class LinkedInClient:
     async def delete_post(self, post_urn: str) -> None:
         headers = await self._headers()
         encoded_urn = urllib.parse.quote(post_urn, safe="")
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.delete(
                 f"/v2/ugcPosts/{encoded_urn}", headers=headers
             )
@@ -112,7 +114,7 @@ class LinkedInClient:
                 ],
             }
         }
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 "/v2/assets",
                 params={"action": "registerUpload"},
@@ -129,7 +131,7 @@ class LinkedInClient:
 
     async def upload_image_binary(self, upload_url: str, image_bytes: bytes) -> None:
         # LinkedIn presigned upload URLs carry their own credentials — no Authorization header.
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.put(
                 upload_url,
                 content=image_bytes,
@@ -158,7 +160,7 @@ class LinkedInClient:
             "specificContent": {"com.linkedin.ugc.ShareContent": share_content},
             "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
         }
-        async with httpx.AsyncClient(base_url=_BASE_URL) as client:
+        async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post("/v2/ugcPosts", json=body, headers=headers)
         self._raise_for_status(response)
         return response.headers.get("x-restli-id", "")

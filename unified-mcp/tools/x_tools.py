@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from core.errors import describe_exception
 from clients.x_client import XClient
 from core.logger import get_logger
 from core.models import ToolResult
@@ -29,5 +30,5 @@ async def post_to_x(
             platform="X (Twitter)",
             action="post_to_x",
             payload={"text": text},
-            error=str(exc),
+            error=describe_exception(exc),
         )

@@ -550,6 +550,81 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         lc = ctx.request_context.lifespan_context
         return await gcs_tmp.delete_temp_image(lc["gcs_temp_storage"], object_name)
 
+    @mcp.tool()
+    async def start_temp_image_upload() -> dict:
+        """
+        Starts a CHUNKED upload for an image, for the case where the file
+        only exists locally to you (e.g. a chat attachment) with no
+        reachable URL, AND a single upload_temp_image(image_base64=...)
+        call has failed or is expected to fail — some MCP clients corrupt
+        or truncate large base64 strings embedded in one tool call.
+        Returns an upload_id. Then:
+          1. Split the file's base64 into small chunks — ~32KB of RAW
+             bytes per chunk (so ~44KB of base64 text) is a safe size.
+          2. Call upload_temp_image_chunk once per chunk, in order,
+             starting chunk_index at 0.
+          3. Call finish_temp_image_upload with the total chunk count to
+             assemble everything and get the same result shape as
+             upload_temp_image (signed_url/public_url, object_name, etc.).
+        Prefer plain upload_temp_image (image_url or a single small
+        image_base64) when possible — only use this chunked flow when
+        those don't work.
+        """
+        ctx = mcp.get_context()
+        lc = ctx.request_context.lifespan_context
+        return await gcs_tmp.start_temp_image_upload(lc["gcs_temp_storage"])
+
+    @mcp.tool()
+    async def upload_temp_image_chunk(
+        upload_id: str,
+        chunk_index: int,
+        chunk_base64: str,
+    ) -> dict:
+        """
+        Uploads one chunk of a file started with start_temp_image_upload.
+        chunk_index is 0-based and chunks must be uploaded in order
+        starting from 0 (finish_temp_image_upload reassembles them by
+        index). Keep each chunk small — around 32KB of raw bytes
+        (~44KB of base64 text) per call.
+        """
+        ctx = mcp.get_context()
+        await ctx.report_progress(0, 100, f"Uploading chunk {chunk_index}...")
+        lc = ctx.request_context.lifespan_context
+        return await gcs_tmp.upload_temp_image_chunk(
+            lc["gcs_temp_storage"], upload_id, chunk_index, chunk_base64
+        )
+
+    @mcp.tool()
+    async def finish_temp_image_upload(
+        upload_id: str,
+        total_chunks: int,
+        mime_type: str = "image/jpeg",
+        filename: str | None = None,
+        ttl_seconds: int = 900,
+        auto_optimize: bool = True,
+    ) -> dict:
+        """
+        Assembles all chunks uploaded via upload_temp_image_chunk (indices
+        0..total_chunks-1 must all have been uploaded) into the final
+        image and uploads it to temporary storage — same result shape as
+        upload_temp_image (signed_url/public_url, object_name, mime_type,
+        size_bytes, expires_at). auto_optimize behaves the same as in
+        upload_temp_image. The staged chunks are deleted after this
+        succeeds.
+        """
+        ctx = mcp.get_context()
+        await ctx.report_progress(0, 100, "Assembling uploaded chunks...")
+        lc = ctx.request_context.lifespan_context
+        return await gcs_tmp.finish_temp_image_upload(
+            lc["gcs_temp_storage"],
+            upload_id,
+            total_chunks,
+            mime_type,
+            filename,
+            ttl_seconds,
+            auto_optimize,
+        )
+
 
 # ── HTTP auth (public deployments) ────────────────────────────────────────────
 

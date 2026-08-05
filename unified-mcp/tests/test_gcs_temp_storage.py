@@ -31,6 +31,10 @@ def _fake_blob(store: dict, name: str):
             blob.content_type = store[name]["content_type"]
 
     def download_as_bytes():
+        if name not in store:
+            from google.cloud.exceptions import NotFound
+
+            raise NotFound("gone")
         return store[name]["data"]
 
     def delete():
@@ -119,6 +123,47 @@ class GCSTempStorageClientTests(TestCase):
 
         self.assertFalse(result["deleted"])
         self.assertEqual(result["reason"], "not_found")
+
+    def test_start_chunked_upload_returns_an_id(self) -> None:
+        client, _store = self._make_client()
+
+        upload_id = asyncio.run(client.start_chunked_upload())
+
+        self.assertTrue(upload_id)
+        self.assertIsInstance(upload_id, str)
+
+    def test_assemble_chunks_concatenates_in_index_order(self) -> None:
+        client, store = self._make_client()
+        upload_id = "test-upload"
+
+        asyncio.run(client.upload_chunk(upload_id, 1, b"-world"))
+        asyncio.run(client.upload_chunk(upload_id, 0, b"hello"))
+
+        data = asyncio.run(client.assemble_chunks(upload_id, total_chunks=2))
+
+        self.assertEqual(data, b"hello-world")
+        # Chunks are staged under tmp/ so the existing lifecycle rule covers them.
+        self.assertTrue(all(name.startswith("tmp/_chunks/") for name in store))
+
+    def test_assemble_chunks_raises_clear_error_on_missing_chunk(self) -> None:
+        client, _store = self._make_client()
+        upload_id = "test-upload"
+        asyncio.run(client.upload_chunk(upload_id, 0, b"only-this-one"))
+
+        with self.assertRaises(GCSTempStorageError) as ctx:
+            asyncio.run(client.assemble_chunks(upload_id, total_chunks=2))
+
+        self.assertIn("Chunk 1", str(ctx.exception))
+
+    def test_cleanup_chunks_removes_all_staged_chunks(self) -> None:
+        client, store = self._make_client()
+        upload_id = "test-upload"
+        asyncio.run(client.upload_chunk(upload_id, 0, b"a"))
+        asyncio.run(client.upload_chunk(upload_id, 1, b"b"))
+
+        asyncio.run(client.cleanup_chunks(upload_id, total_chunks=2))
+
+        self.assertEqual(store, {})
 
 
 class TempImageTokenTests(TestCase):
@@ -389,3 +434,145 @@ class AutoOptimizeTests(TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(captured["data"], large_png)
         self.assertEqual(captured["mime_type"], "image/png")
+
+
+class ChunkedUploadToolTests(TestCase):
+    """
+    Covers the start/upload_chunk/finish flow at the tool layer — the path
+    recommended when a file only exists locally to the caller (no URL) and
+    a single image_base64 call has failed or is expected to fail.
+    """
+
+    def _make_fake_client(self):
+        client = MagicMock()
+        chunks: dict[tuple[str, int], bytes] = {}
+        captured = {}
+
+        async def start_chunked_upload():
+            return "upload-abc"
+
+        async def upload_chunk(upload_id, chunk_index, data):
+            chunks[(upload_id, chunk_index)] = data
+
+        async def assemble_chunks(upload_id, total_chunks):
+            missing = [i for i in range(total_chunks) if (upload_id, i) not in chunks]
+            if missing:
+                from clients.gcs_temp_storage_client import GCSTempStorageError
+
+                raise GCSTempStorageError(f"Chunk {missing[0]} of {total_chunks} is missing")
+            return b"".join(chunks[(upload_id, i)] for i in range(total_chunks))
+
+        async def cleanup_chunks(upload_id, total_chunks):
+            for i in range(total_chunks):
+                chunks.pop((upload_id, i), None)
+
+        async def upload_temp_image(data, mime_type, filename=None, ttl_seconds=900):
+            captured["data"] = data
+            captured["mime_type"] = mime_type
+            return {
+                "object_name": "tmp/assembled.jpg",
+                "bucket": "fake-bucket",
+                "signed_url": "https://unified-mcp.example.run.app/temp-image/abc.def",
+                "public_url": "https://unified-mcp.example.run.app/temp-image/abc.def",
+                "mime_type": mime_type,
+                "size_bytes": len(data),
+                "expires_at": "2026-01-01T00:00:00+00:00",
+            }
+
+        client.start_chunked_upload.side_effect = start_chunked_upload
+        client.upload_chunk.side_effect = upload_chunk
+        client.assemble_chunks.side_effect = assemble_chunks
+        client.cleanup_chunks.side_effect = cleanup_chunks
+        client.upload_temp_image.side_effect = upload_temp_image
+        return client, chunks, captured
+
+    def test_start_returns_an_upload_id(self) -> None:
+        client, _chunks, _captured = self._make_fake_client()
+
+        result = asyncio.run(gcs_tools.start_temp_image_upload(client))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["upload_id"], "upload-abc")
+
+    def test_full_chunked_flow_reassembles_original_bytes(self) -> None:
+        client, _chunks, captured = self._make_fake_client()
+        original = b"a fairly ordinary fake jpeg payload, split into pieces"
+        part_a, part_b, part_c = original[:20], original[20:40], original[40:]
+
+        start = asyncio.run(gcs_tools.start_temp_image_upload(client))
+        upload_id = start["data"]["upload_id"]
+
+        for index, part in enumerate([part_a, part_b, part_c]):
+            chunk_result = asyncio.run(
+                gcs_tools.upload_temp_image_chunk(
+                    client, upload_id, index, base64.b64encode(part).decode()
+                )
+            )
+            self.assertTrue(chunk_result["success"])
+
+        finish_result = asyncio.run(
+            gcs_tools.finish_temp_image_upload(
+                client, upload_id, total_chunks=3, auto_optimize=False
+            )
+        )
+
+        self.assertTrue(finish_result["success"])
+        self.assertEqual(captured["data"], original)
+        self.assertEqual(
+            finish_result["data"]["public_url"],
+            "https://unified-mcp.example.run.app/temp-image/abc.def",
+        )
+
+    def test_upload_chunk_rejects_invalid_base64(self) -> None:
+        client, chunks, _captured = self._make_fake_client()
+
+        result = asyncio.run(
+            gcs_tools.upload_temp_image_chunk(client, "upload-abc", 0, "not-valid-base64!!")
+        )
+
+        self.assertFalse(result["success"])
+        self.assertIn("base64", result["error"])
+        self.assertEqual(chunks, {})
+
+    def test_finish_fails_clearly_when_a_chunk_is_missing(self) -> None:
+        client, _chunks, _captured = self._make_fake_client()
+        upload_id = "upload-abc"
+        asyncio.run(
+            gcs_tools.upload_temp_image_chunk(
+                client, upload_id, 0, base64.b64encode(b"only-chunk-zero").decode()
+            )
+        )
+
+        result = asyncio.run(
+            gcs_tools.finish_temp_image_upload(client, upload_id, total_chunks=2)
+        )
+
+        self.assertFalse(result["success"])
+        self.assertIn("Chunk 1", result["error"])
+        client.upload_temp_image.assert_not_called()
+
+    def test_finish_applies_auto_optimize_to_assembled_bytes(self) -> None:
+        client, _chunks, captured = self._make_fake_client()
+        large_png = AutoOptimizeTests()._make_noisy_png((900, 900))
+        self.assertGreater(len(large_png), gcs_tools._AUTO_OPTIMIZE_THRESHOLD_BYTES)
+
+        upload_id = "upload-large"
+        chunk_size = 40_000
+        for index in range(0, len(large_png), chunk_size):
+            part = large_png[index : index + chunk_size]
+            asyncio.run(
+                gcs_tools.upload_temp_image_chunk(
+                    client, upload_id, index // chunk_size, base64.b64encode(part).decode()
+                )
+            )
+        total_chunks = (len(large_png) + chunk_size - 1) // chunk_size
+
+        result = asyncio.run(
+            gcs_tools.finish_temp_image_upload(
+                client, upload_id, total_chunks=total_chunks, mime_type="image/png"
+            )
+        )
+
+        self.assertTrue(result["success"])
+        self.assertLess(len(captured["data"]), len(large_png))
+        self.assertEqual(captured["mime_type"], "image/jpeg")

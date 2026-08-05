@@ -459,19 +459,29 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
 
     @mcp.tool()
     async def upload_temp_image(
-        image_base64: str,
+        image_base64: str | None = None,
+        image_url: str | None = None,
         mime_type: str = "image/jpeg",
         filename: str | None = None,
         ttl_seconds: int = 900,
     ) -> dict:
         """
-        Uploads a base64-encoded image (e.g. one attached or created
-        directly in the chat — NOT necessarily from generate_image) to a
-        private, temporary Cloud Storage location and returns a
-        short-lived public signed URL usable as image_url for Instagram,
-        Threads, or any other publishing tool that requires a public URL
-        rather than a local file. image_base64 may be a plain base64
-        string or a data URI (data:image/png;base64,...).
+        Uploads an image (e.g. one attached or created directly in the
+        chat — NOT necessarily from generate_image) to a private,
+        temporary Cloud Storage location and returns a short-lived public
+        URL usable as image_url for Instagram, Threads, or any other
+        publishing tool that requires a public URL rather than a local
+        file.
+        Provide exactly ONE of:
+          - image_url: a URL the server fetches directly (PREFERRED —
+            avoids transporting the image bytes through the tool call at
+            all). Use this whenever the image is already reachable at a
+            URL, or when image_base64 has failed with a decode/corruption
+            error — large base64 payloads (roughly >1-2MB) are unreliable
+            through some MCP clients.
+          - image_base64: a plain base64 string or a data URI
+            (data:image/png;base64,...). Capped at 4MB decoded; above
+            that, or if it keeps failing to decode, switch to image_url.
         Call delete_temp_image once you're done publishing — don't rely
         on ttl_seconds/the bucket's cleanup rule for prompt deletion,
         those are just safety nets. ttl_seconds defaults to 900 (15 min).
@@ -479,7 +489,7 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         ctx = mcp.get_context()
         lc = ctx.request_context.lifespan_context
         return await gcs_tmp.upload_temp_image(
-            lc["gcs_temp_storage"], image_base64, mime_type, filename, ttl_seconds
+            lc["gcs_temp_storage"], image_base64, image_url, mime_type, filename, ttl_seconds
         )
 
     @mcp.tool()

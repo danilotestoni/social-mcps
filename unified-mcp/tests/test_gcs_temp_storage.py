@@ -187,7 +187,9 @@ class GcsTempStorageToolsTests(TestCase):
         client = self._make_fake_client()
         raw = base64.b64encode(b"raw-image-bytes").decode()
 
-        result = asyncio.run(gcs_tools.upload_temp_image(client, raw, "image/jpeg"))
+        result = asyncio.run(
+            gcs_tools.upload_temp_image(client, image_base64=raw, mime_type="image/jpeg")
+        )
 
         self.assertTrue(result["success"])
         self.assertEqual(result["data"]["mime_type"], "image/jpeg")
@@ -198,7 +200,9 @@ class GcsTempStorageToolsTests(TestCase):
         raw = base64.b64encode(b"png-bytes").decode()
         data_uri = f"data:image/png;base64,{raw}"
 
-        result = asyncio.run(gcs_tools.upload_temp_image(client, data_uri, "image/jpeg"))
+        result = asyncio.run(
+            gcs_tools.upload_temp_image(client, image_base64=data_uri, mime_type="image/jpeg")
+        )
 
         self.assertTrue(result["success"])
         # mime_type from the data URI wins over the mime_type argument's default.
@@ -207,10 +211,101 @@ class GcsTempStorageToolsTests(TestCase):
     def test_upload_temp_image_rejects_invalid_base64(self) -> None:
         client = self._make_fake_client()
 
-        result = asyncio.run(gcs_tools.upload_temp_image(client, "not-valid-base64!!", "image/jpeg"))
+        result = asyncio.run(
+            gcs_tools.upload_temp_image(
+                client, image_base64="not-valid-base64!!", mime_type="image/jpeg"
+            )
+        )
 
         self.assertFalse(result["success"])
         self.assertIn("base64", result["error"])
+        client.upload_temp_image.assert_not_called()
+
+    def test_upload_temp_image_strips_embedded_whitespace(self) -> None:
+        client = self._make_fake_client()
+        raw = base64.b64encode(b"raw-image-bytes-here").decode()
+        wrapped = "\n".join(raw[i : i + 8] for i in range(0, len(raw), 8))
+
+        result = asyncio.run(gcs_tools.upload_temp_image(client, image_base64=wrapped))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["size_bytes"], len(b"raw-image-bytes-here"))
+
+    def test_upload_temp_image_rejects_oversized_base64(self) -> None:
+        client = self._make_fake_client()
+        huge = base64.b64encode(b"x" * (gcs_tools._MAX_BASE64_DECODED_BYTES + 1)).decode()
+
+        result = asyncio.run(gcs_tools.upload_temp_image(client, image_base64=huge))
+
+        self.assertFalse(result["success"])
+        self.assertIn("byte limit", result["error"])
+        client.upload_temp_image.assert_not_called()
+
+    def test_upload_temp_image_rejects_when_neither_source_given(self) -> None:
+        client = self._make_fake_client()
+
+        result = asyncio.run(gcs_tools.upload_temp_image(client))
+
+        self.assertFalse(result["success"])
+        client.upload_temp_image.assert_not_called()
+
+    def test_upload_temp_image_rejects_when_both_sources_given(self) -> None:
+        client = self._make_fake_client()
+        raw = base64.b64encode(b"data").decode()
+
+        result = asyncio.run(
+            gcs_tools.upload_temp_image(
+                client, image_base64=raw, image_url="https://example.com/img.jpg"
+            )
+        )
+
+        self.assertFalse(result["success"])
+        client.upload_temp_image.assert_not_called()
+
+    def test_upload_temp_image_fetches_from_image_url(self) -> None:
+        import httpx
+
+        client = self._make_fake_client()
+
+        def handler(request):
+            return httpx.Response(200, content=b"fetched-bytes", headers={"content-type": "image/webp"})
+
+        transport = httpx.MockTransport(handler)
+
+        async def fake_get(self, url):
+            async with httpx.AsyncClient(transport=transport) as c:
+                return await c.request("GET", url)
+
+        with patch("httpx.AsyncClient.get", fake_get):
+            result = asyncio.run(
+                gcs_tools.upload_temp_image(client, image_url="https://example.com/img.webp")
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["mime_type"], "image/webp")
+        self.assertEqual(result["data"]["size_bytes"], len(b"fetched-bytes"))
+
+    def test_upload_temp_image_rejects_http_error_from_image_url(self) -> None:
+        import httpx
+
+        client = self._make_fake_client()
+
+        def handler(request):
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+
+        async def fake_get(self, url):
+            async with httpx.AsyncClient(transport=transport) as c:
+                return await c.request("GET", url)
+
+        with patch("httpx.AsyncClient.get", fake_get):
+            result = asyncio.run(
+                gcs_tools.upload_temp_image(client, image_url="https://example.com/missing.jpg")
+            )
+
+        self.assertFalse(result["success"])
+        self.assertIn("404", result["error"])
         client.upload_temp_image.assert_not_called()
 
     def test_delete_temp_image_returns_deletion_result(self) -> None:

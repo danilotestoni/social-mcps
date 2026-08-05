@@ -506,17 +506,26 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
           - image_url: a URL the server fetches directly. STRONGLY
             PREFERRED whenever the image is already reachable at a URL —
             it avoids transporting any image bytes through the tool call
-            at all, which is the fragile part.
+            at all, which is the fragile part. If you're in ChatGPT and
+            the image (attached OR generated natively) has no URL you
+            know of, use its "Share" feature on that image/message and
+            pass the resulting chatgpt.com/s/... link here directly — this
+            tool detects the HTML share page and automatically extracts
+            and fetches the real public image URL embedded in it (a
+            chatgpt.com/backend-api/estuary/public_content/... link,
+            confirmed genuinely public with no auth needed). No base64,
+            no chunking, no manual link-hunting required.
           - image_base64: a plain base64 string or a data URI
-            (data:image/png;base64,...). Only for genuinely local files
-            with no URL (e.g. an attachment from the user). Keep the
-            underlying FILE under ~50KB if at all possible — large base64
-            payloads have been observed getting corrupted or truncated by
-            some MCP clients well before reaching our 4MB server-side
-            cap (failures seen in the 100-130KB base64 range; a tiny
-            ~12KB payload went through fine). If it fails, shrink the
-            image further (lower resolution and/or JPEG quality) and
-            retry, or find/produce a URL for it instead.
+            (data:image/png;base64,...). LAST RESORT — only when no URL
+            exists at all (not even a Share link) for a genuinely local
+            file. Keep the underlying FILE under ~50KB if at all possible;
+            if that's still not reliable, use
+            start_temp_image_upload/upload_temp_image_chunk/
+            finish_temp_image_upload instead of one big call — but note
+            that in practice even chunking has been observed stalling for
+            minutes inside ChatGPT's own sandbox while it prepares the
+            base64 chunks, before any call reaches this server at all.
+            Exhaust the image_url/Share-link route first.
         auto_optimize (default true): if the received image is large
         (>1.5MB or a large resolution), it's automatically downscaled and
         re-encoded as JPEG before upload — keeps things fast and within

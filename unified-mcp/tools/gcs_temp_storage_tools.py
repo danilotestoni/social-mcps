@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import io
+import json
 import re
 
 import httpx
@@ -75,15 +76,75 @@ def _decode_image_base64(image_base64: str, default_mime_type: str) -> tuple[byt
     return data, mime_type
 
 
-async def _fetch_image_url(image_url: str, default_mime_type: str) -> tuple[bytes, str]:
+# ChatGPT attachments/generated images have no fetchable URL of their own,
+# but their "Share" page (chatgpt.com/s/...) embeds one: a
+# backend-api/estuary/public_content/enc/<token> link that IS publicly
+# downloadable with no auth (verified live: plain curl, 200, real image
+# bytes). If image_url resolves to an HTML page, we look inside it for
+# that link instead of failing — turns "paste the share link" into a
+# one-step operation.
+_ESTUARY_URL_RE = re.compile(
+    r"https://chatgpt\.com/backend-api/estuary/public_content/enc/[A-Za-z0-9+/=_-]+"
+)
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _pick_estuary_url(html: str) -> str | None:
+    """
+    A share page can embed several enc/<token> links for the same image
+    (different renditions — thumbnail, link-unfurl preview, markdown
+    embed...). Each token is itself base64 JSON with an "id" field; the
+    direct file reference looks like "m_.../file_..." while the other
+    renditions have extra "sediment:"/"#unfurl"/"#md" fragments in theirs.
+    Prefer a direct reference; fall back to the first match otherwise.
+    """
+    candidates = _ESTUARY_URL_RE.findall(html)
+    if not candidates:
+        return None
+
+    def is_direct_file_reference(url: str) -> bool:
+        token = url.rsplit("/", 1)[-1]
+        try:
+            padded = token + "=" * (-len(token) % 4)
+            payload = json.loads(base64.b64decode(padded))
+        except Exception:
+            return False
+        return "sediment" not in str(payload.get("id", ""))
+
+    for candidate in candidates:
+        if is_direct_file_reference(candidate):
+            return candidate
+    return candidates[0]
+
+
+async def _fetch_image_url(
+    image_url: str, default_mime_type: str, _following_estuary_link: bool = False
+) -> tuple[bytes, str]:
     try:
         async with httpx.AsyncClient(timeout=_URL_FETCH_TIMEOUT, follow_redirects=True) as client:
-            response = await client.get(image_url)
+            response = await client.get(image_url, headers={"User-Agent": _BROWSER_USER_AGENT})
     except httpx.HTTPError as exc:
         raise ValueError(f"Could not fetch image_url: {exc}") from exc
 
     if response.status_code >= 400:
         raise ValueError(f"image_url returned HTTP {response.status_code}.")
+
+    content_type = response.headers.get("content-type", "").split(";")[0].strip()
+
+    if content_type.startswith("text/html") and not _following_estuary_link:
+        estuary_url = _pick_estuary_url(response.text)
+        if estuary_url is None:
+            raise ValueError(
+                "image_url returned an HTML page instead of an image, and no "
+                "ChatGPT estuary image link was found inside it. If this is a "
+                "ChatGPT 'Share' link, make sure it's the share link for the "
+                "image/message itself."
+            )
+        _logger.info("image_url returned HTML; following the embedded estuary link instead.")
+        return await _fetch_image_url(estuary_url, default_mime_type, _following_estuary_link=True)
 
     data = response.content
     if not data:
@@ -95,7 +156,6 @@ async def _fetch_image_url(image_url: str, default_mime_type: str) -> tuple[byte
             f"{_MAX_URL_FETCH_BYTES}-byte limit."
         )
 
-    content_type = response.headers.get("content-type", "").split(";")[0].strip()
     mime_type = content_type or default_mime_type
     return data, mime_type
 

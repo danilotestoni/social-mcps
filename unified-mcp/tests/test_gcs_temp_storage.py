@@ -318,9 +318,9 @@ class GcsTempStorageToolsTests(TestCase):
 
         transport = httpx.MockTransport(handler)
 
-        async def fake_get(self, url):
+        async def fake_get(self, url, headers=None):
             async with httpx.AsyncClient(transport=transport) as c:
-                return await c.request("GET", url)
+                return await c.request("GET", url, headers=headers)
 
         with patch("httpx.AsyncClient.get", fake_get):
             result = asyncio.run(
@@ -341,9 +341,9 @@ class GcsTempStorageToolsTests(TestCase):
 
         transport = httpx.MockTransport(handler)
 
-        async def fake_get(self, url):
+        async def fake_get(self, url, headers=None):
             async with httpx.AsyncClient(transport=transport) as c:
-                return await c.request("GET", url)
+                return await c.request("GET", url, headers=headers)
 
         with patch("httpx.AsyncClient.get", fake_get):
             result = asyncio.run(
@@ -352,6 +352,81 @@ class GcsTempStorageToolsTests(TestCase):
 
         self.assertFalse(result["success"])
         self.assertIn("404", result["error"])
+        client.upload_temp_image.assert_not_called()
+
+    def test_upload_temp_image_follows_estuary_link_embedded_in_html(self) -> None:
+        """
+        image_url pointing at a ChatGPT 'Share' page (HTML, not an image)
+        should be auto-resolved: find the embedded estuary public_content
+        link and fetch the real image from there instead of failing.
+        """
+        import base64 as b64
+        import json as jsonlib
+
+        import httpx
+
+        client = self._make_fake_client()
+
+        direct_token = b64.b64encode(jsonlib.dumps({"id": "m_abc:file_xyz"}).encode()).decode()
+        sediment_token = b64.b64encode(
+            jsonlib.dumps({"id": "m_abc:sediment://foo#unfurl"}).encode()
+        ).decode()
+        direct_url = f"https://chatgpt.com/backend-api/estuary/public_content/enc/{direct_token}"
+        sediment_url = f"https://chatgpt.com/backend-api/estuary/public_content/enc/{sediment_token}"
+        share_html = f"""
+        <html><body>
+        <img src="{sediment_url}">
+        <img src="{direct_url}">
+        </body></html>
+        """
+
+        def handler(request):
+            if str(request.url) == "https://chatgpt.com/s/m_fake":
+                return httpx.Response(200, content=share_html.encode(), headers={"content-type": "text/html"})
+            if str(request.url) == direct_url:
+                return httpx.Response(
+                    200, content=b"real-image-bytes", headers={"content-type": "image/png"}
+                )
+            if str(request.url) == sediment_url:
+                raise AssertionError("Should have preferred the direct file reference, not the sediment one")
+            raise AssertionError(f"Unexpected request: {request.url}")
+
+        transport = httpx.MockTransport(handler)
+
+        async def fake_get(self, url, headers=None):
+            async with httpx.AsyncClient(transport=transport) as c:
+                return await c.request("GET", url, headers=headers)
+
+        with patch("httpx.AsyncClient.get", fake_get):
+            result = asyncio.run(
+                gcs_tools.upload_temp_image(client, image_url="https://chatgpt.com/s/m_fake")
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["mime_type"], "image/png")
+        self.assertEqual(result["data"]["size_bytes"], len(b"real-image-bytes"))
+
+    def test_upload_temp_image_fails_clearly_when_html_has_no_estuary_link(self) -> None:
+        import httpx
+
+        client = self._make_fake_client()
+
+        def handler(request):
+            return httpx.Response(200, content=b"<html>nope</html>", headers={"content-type": "text/html"})
+
+        transport = httpx.MockTransport(handler)
+
+        async def fake_get(self, url, headers=None):
+            async with httpx.AsyncClient(transport=transport) as c:
+                return await c.request("GET", url, headers=headers)
+
+        with patch("httpx.AsyncClient.get", fake_get):
+            result = asyncio.run(
+                gcs_tools.upload_temp_image(client, image_url="https://example.com/some-page")
+            )
+
+        self.assertFalse(result["success"])
+        self.assertIn("HTML", result["error"])
         client.upload_temp_image.assert_not_called()
 
     def test_delete_temp_image_returns_deletion_result(self) -> None:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import sys
+import time
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
@@ -10,30 +12,25 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from clients.gcs_temp_storage_client import GCSTempStorageClient, GCSTempStorageError
+from core.temp_image_tokens import TempImageTokenError, mint, verify
 import tools.gcs_temp_storage_tools as gcs_tools
-
-
-class _FakeSigningCredentials:
-    """Stands in for a service-account JSON key credential (has a private key)."""
-
-
-class _FakeComputeCredentials:
-    """Stands in for the Cloud Run attached service account (no private key)."""
-
-    def __init__(self):
-        self.token = "fake-access-token"
-        self.service_account_email = None  # resolved only after refresh(), like the real thing
-
-    def refresh(self, request):
-        self.service_account_email = "817213604469-compute@developer.gserviceaccount.com"
 
 
 def _fake_blob(store: dict, name: str):
     blob = MagicMock()
     blob.name = name
+    blob.content_type = None
 
     def upload_from_string(data, content_type=None):
         store[name] = {"data": data, "content_type": content_type}
+        blob.content_type = content_type
+
+    def reload():
+        if name in store:
+            blob.content_type = store[name]["content_type"]
+
+    def download_as_bytes():
+        return store[name]["data"]
 
     def delete():
         if name not in store:
@@ -42,20 +39,20 @@ def _fake_blob(store: dict, name: str):
             raise NotFound("gone")
         del store[name]
 
-    def generate_signed_url(**kwargs):
-        # Assert the caller actually tried to authorize the signature somehow.
-        assert kwargs.get("version") == "v4"
-        assert kwargs.get("method") == "GET"
-        return f"https://storage.googleapis.com/fake-bucket/{name}?X-Goog-Signature=fake"
-
     blob.upload_from_string.side_effect = upload_from_string
+    blob.reload.side_effect = reload
+    blob.download_as_bytes.side_effect = download_as_bytes
     blob.delete.side_effect = delete
-    blob.generate_signed_url.side_effect = generate_signed_url
     return blob
 
 
 class GCSTempStorageClientTests(TestCase):
-    def _make_client_with_fake_storage(self, signing_credentials):
+    def setUp(self) -> None:
+        patcher = patch.dict(os.environ, {"MCP_AUTH_TOKEN": "test-signing-secret"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _make_client(self, public_base_url="https://unified-mcp.example.run.app"):
         store: dict = {}
         fake_bucket = MagicMock()
         fake_bucket.blob.side_effect = lambda name: _fake_blob(store, name)
@@ -63,65 +60,50 @@ class GCSTempStorageClientTests(TestCase):
         fake_storage_client = MagicMock()
         fake_storage_client.bucket.return_value = fake_bucket
 
-        client = GCSTempStorageClient("fake-bucket")
+        client = GCSTempStorageClient("fake-bucket", public_base_url=public_base_url)
         client._client = fake_storage_client
-
-        # google.auth.default() is called fresh (with cloud-platform scope)
-        # for signing, independently of the storage client's own credentials.
-        patcher = patch(
-            "clients.gcs_temp_storage_client.google.auth.default",
-            return_value=(signing_credentials, "fake-project"),
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
         return client, store
 
-    def test_upload_with_local_service_account_key_signs_directly(self) -> None:
-        with patch(
-            "clients.gcs_temp_storage_client.isinstance",
-            side_effect=lambda obj, cls: True,  # simulate Signing credentials
-        ):
-            client, store = self._make_client_with_fake_storage(_FakeSigningCredentials())
-            result = asyncio.run(
-                client.upload_temp_image(b"fake-jpeg-bytes", "image/jpeg", ttl_seconds=60)
-            )
+    def test_upload_returns_own_proxy_url_not_a_raw_gcs_url(self) -> None:
+        client, store = self._make_client()
+
+        result = asyncio.run(
+            client.upload_temp_image(b"fake-jpeg-bytes", "image/jpeg", ttl_seconds=60)
+        )
 
         self.assertTrue(result["object_name"].startswith("tmp/"))
         self.assertTrue(result["object_name"].endswith(".jpg"))
         self.assertEqual(result["signed_url"], result["public_url"])
+        self.assertTrue(
+            result["public_url"].startswith("https://unified-mcp.example.run.app/temp-image/")
+        )
+        self.assertNotIn("storage.googleapis.com", result["public_url"])
+        self.assertNotIn("X-Goog-Signature", result["public_url"])
         self.assertEqual(result["mime_type"], "image/jpeg")
         self.assertEqual(result["size_bytes"], len(b"fake-jpeg-bytes"))
         self.assertIn(result["object_name"], store)
-        self.assertEqual(store[result["object_name"]]["data"], b"fake-jpeg-bytes")
 
-    def test_upload_on_cloud_run_delegates_signing_to_iam(self) -> None:
-        credentials = _FakeComputeCredentials()
-        client, store = self._make_client_with_fake_storage(credentials)
-
-        result = asyncio.run(
-            client.upload_temp_image(b"fake-png-bytes", "image/png", ttl_seconds=60)
-        )
-
-        # refresh() must have been called to resolve the real service account email
-        self.assertEqual(
-            credentials.service_account_email,
-            "817213604469-compute@developer.gserviceaccount.com",
-        )
-        self.assertTrue(result["signed_url"].startswith("https://storage.googleapis.com/"))
-        self.assertIn(result["object_name"], store)
-
-    def test_upload_raises_clear_error_when_signing_is_impossible(self) -> None:
-        credentials = MagicMock()
-        credentials.token = None
-        credentials.service_account_email = None
-        client, _store = self._make_client_with_fake_storage(credentials)
+    def test_upload_without_public_base_url_raises_clear_error(self) -> None:
+        client, _store = self._make_client(public_base_url="")
 
         with self.assertRaises(GCSTempStorageError):
             asyncio.run(client.upload_temp_image(b"data", "image/jpeg"))
 
+    def test_download_returns_bytes_and_content_type(self) -> None:
+        client, store = self._make_client()
+        upload_result = asyncio.run(
+            client.upload_temp_image(b"real-bytes-here", "image/png", ttl_seconds=60)
+        )
+
+        data, content_type = asyncio.run(
+            client.download_temp_image(upload_result["object_name"])
+        )
+
+        self.assertEqual(data, b"real-bytes-here")
+        self.assertEqual(content_type, "image/png")
+
     def test_delete_removes_object(self) -> None:
-        client, store = self._make_client_with_fake_storage(_FakeComputeCredentials())
+        client, store = self._make_client()
         store["tmp/abc.jpg"] = {"data": b"x", "content_type": "image/jpeg"}
 
         result = asyncio.run(client.delete_temp_image("tmp/abc.jpg"))
@@ -130,12 +112,51 @@ class GCSTempStorageClientTests(TestCase):
         self.assertNotIn("tmp/abc.jpg", store)
 
     def test_delete_is_safe_when_object_already_gone(self) -> None:
-        client, _store = self._make_client_with_fake_storage(_FakeComputeCredentials())
+        client, _store = self._make_client()
 
         result = asyncio.run(client.delete_temp_image("tmp/does-not-exist.jpg"))
 
         self.assertFalse(result["deleted"])
         self.assertEqual(result["reason"], "not_found")
+
+
+class TempImageTokenTests(TestCase):
+    def setUp(self) -> None:
+        patcher = patch.dict(os.environ, {"MCP_AUTH_TOKEN": "test-signing-secret"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_mint_and_verify_roundtrip(self) -> None:
+        token = mint("tmp/abc123.jpg", int(time.time()) + 60)
+
+        object_name = verify(token)
+
+        self.assertEqual(object_name, "tmp/abc123.jpg")
+
+    def test_verify_rejects_expired_token(self) -> None:
+        token = mint("tmp/abc123.jpg", int(time.time()) - 1)
+
+        with self.assertRaises(TempImageTokenError):
+            verify(token)
+
+    def test_verify_rejects_tampered_object_name(self) -> None:
+        token = mint("tmp/abc123.jpg", int(time.time()) + 60)
+        payload_b64, signature_b64 = token.split(".", 1)
+        tampered = f"{payload_b64}x.{signature_b64}"
+
+        with self.assertRaises(TempImageTokenError):
+            verify(tampered)
+
+    def test_verify_rejects_wrong_signing_key(self) -> None:
+        token = mint("tmp/abc123.jpg", int(time.time()) + 60)
+
+        with patch.dict(os.environ, {"MCP_AUTH_TOKEN": "a-different-secret"}):
+            with self.assertRaises(TempImageTokenError):
+                verify(token)
+
+    def test_verify_rejects_malformed_token(self) -> None:
+        with self.assertRaises(TempImageTokenError):
+            verify("not-a-valid-token")
 
 
 class GcsTempStorageToolsTests(TestCase):
@@ -148,8 +169,8 @@ class GcsTempStorageToolsTests(TestCase):
             return {
                 "object_name": "tmp/fake.jpg",
                 "bucket": "fake-bucket",
-                "signed_url": "https://storage.googleapis.com/fake-bucket/tmp/fake.jpg?sig=1",
-                "public_url": "https://storage.googleapis.com/fake-bucket/tmp/fake.jpg?sig=1",
+                "signed_url": "https://unified-mcp.example.run.app/temp-image/abc.def",
+                "public_url": "https://unified-mcp.example.run.app/temp-image/abc.def",
                 "mime_type": mime_type,
                 "size_bytes": len(data),
                 "expires_at": "2026-01-01T00:00:00+00:00",

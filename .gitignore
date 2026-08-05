@@ -46,3 +46,5 @@ Stock_IMAGES/Stylized power grid lines and electrical substations merging with a
 **/node_modules/
 **/.wrangler/
 **/.dev.vars
+**/.gdk/
+.gck/

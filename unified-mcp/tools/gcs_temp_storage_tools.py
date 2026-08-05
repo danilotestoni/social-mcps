@@ -177,3 +177,77 @@ async def delete_temp_image(client: GCSTempStorageClient, object_name: str) -> d
     except Exception as exc:
         _logger.exception("Unexpected error in delete_temp_image")
         return ToolResult(success=False, error=describe_exception(exc)).model_dump()
+
+
+# ── Chunked upload ──────────────────────────────────────────────────────────
+#
+# For images with no available URL (e.g. a file that only exists in the
+# calling client's own local/sandbox filesystem) where a single
+# image_base64 call has failed or is expected to fail — split the transfer
+# into many small tool calls instead. Recommended chunk size: ~32KB of raw
+# bytes (~44KB base64) per call, comfortably under every failure threshold
+# observed so far.
+
+
+def _decode_chunk_base64(chunk_base64: str) -> bytes:
+    raw = re.sub(r"\s+", "", chunk_base64)
+    try:
+        return base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"chunk_base64 is not valid base64 ({exc}).") from exc
+
+
+async def start_temp_image_upload(client: GCSTempStorageClient) -> dict:
+    try:
+        upload_id = await client.start_chunked_upload()
+        return ToolResult(success=True, data={"upload_id": upload_id}).model_dump()
+    except Exception as exc:
+        _logger.exception("Unexpected error in start_temp_image_upload")
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
+
+
+async def upload_temp_image_chunk(
+    client: GCSTempStorageClient,
+    upload_id: str,
+    chunk_index: int,
+    chunk_base64: str,
+) -> dict:
+    try:
+        data = _decode_chunk_base64(chunk_base64)
+        await client.upload_chunk(upload_id, chunk_index, data)
+        return ToolResult(
+            success=True, data={"upload_id": upload_id, "chunk_index": chunk_index, "bytes": len(data)}
+        ).model_dump()
+    except ValueError as exc:
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
+    except GCSTempStorageError as exc:
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
+    except Exception as exc:
+        _logger.exception("Unexpected error in upload_temp_image_chunk")
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
+
+
+async def finish_temp_image_upload(
+    client: GCSTempStorageClient,
+    upload_id: str,
+    total_chunks: int,
+    mime_type: str = "image/jpeg",
+    filename: str | None = None,
+    ttl_seconds: int = 900,
+    auto_optimize: bool = True,
+) -> dict:
+    try:
+        data = await client.assemble_chunks(upload_id, total_chunks)
+        resolved_mime_type = mime_type
+        if auto_optimize:
+            data, resolved_mime_type = _maybe_optimize(data, resolved_mime_type)
+        result = await client.upload_temp_image(
+            data, resolved_mime_type, filename=filename, ttl_seconds=ttl_seconds
+        )
+        await client.cleanup_chunks(upload_id, total_chunks)
+        return ToolResult(success=True, data=result).model_dump()
+    except GCSTempStorageError as exc:
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
+    except Exception as exc:
+        _logger.exception("Unexpected error in finish_temp_image_upload")
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()

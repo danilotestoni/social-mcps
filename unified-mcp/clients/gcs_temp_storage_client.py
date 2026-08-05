@@ -13,7 +13,9 @@ from core.logger import get_logger
 from core.temp_image_tokens import mint
 
 _OBJECT_PREFIX = "tmp"
+_CHUNK_PREFIX = "tmp/_chunks"  # under tmp/, so the existing lifecycle rule covers orphans too
 _MAX_TTL_SECONDS = 7 * 24 * 3600  # 604800s, matched to GCS's own V4 signed URL ceiling
+_MAX_CHUNKS = 2000  # backstop against a runaway/misbehaving caller
 
 
 class GCSTempStorageError(Exception):
@@ -67,7 +69,7 @@ class GCSTempStorageClient:
         token = mint(object_name, expires_at)
         return f"{self._public_base_url}/temp-image/{token}"
 
-    def _upload_temp_image_sync(
+    def _finalize_upload_sync(
         self,
         data: bytes,
         mime_type: str,
@@ -126,8 +128,84 @@ class GCSTempStorageClient:
         thread so the async MCP event loop isn't blocked.
         """
         return await asyncio.to_thread(
-            self._upload_temp_image_sync, data, mime_type, filename, ttl_seconds
+            self._finalize_upload_sync, data, mime_type, filename, ttl_seconds
         )
+
+    # ── Chunked upload ──────────────────────────────────────────────────
+    #
+    # Large base64 payloads embedded in a single tools/call argument have
+    # proven unreliable through some MCP client/gateway chains (observed:
+    # both truncation and outright corruption, unrelated to our own 4MB
+    # cap — failures started around 100-130KB of base64). Splitting the
+    # transfer into many small tool calls sidesteps that: each chunk is
+    # small enough to stay well clear of wherever the limit actually is.
+    #
+    # Chunks are staged as individual small objects under tmp/_chunks/
+    # (not accumulated in this process's memory) so the upload survives
+    # its chunks landing on different Cloud Run instances — GCS is the
+    # shared state, not a local dict.
+
+    def _start_chunked_upload_sync(self) -> str:
+        return uuid.uuid4().hex
+
+    async def start_chunked_upload(self) -> str:
+        """Returns a new upload_id to pass to upload_chunk/finish_chunked_upload."""
+        return await asyncio.to_thread(self._start_chunked_upload_sync)
+
+    def _chunk_object_name(self, upload_id: str, chunk_index: int) -> str:
+        return f"{_CHUNK_PREFIX}/{upload_id}/{chunk_index:06d}"
+
+    def _upload_chunk_sync(self, upload_id: str, chunk_index: int, data: bytes) -> None:
+        if chunk_index < 0 or chunk_index >= _MAX_CHUNKS:
+            raise GCSTempStorageError(f"chunk_index out of range (0-{_MAX_CHUNKS - 1}).")
+        client = self._get_client()
+        bucket = client.bucket(self._bucket_name)
+        blob = bucket.blob(self._chunk_object_name(upload_id, chunk_index))
+        blob.upload_from_string(data, content_type="application/octet-stream")
+
+    async def upload_chunk(self, upload_id: str, chunk_index: int, data: bytes) -> None:
+        """Stages one chunk of an in-progress chunked upload."""
+        await asyncio.to_thread(self._upload_chunk_sync, upload_id, chunk_index, data)
+
+    def _assemble_chunks_sync(self, upload_id: str, total_chunks: int) -> bytes:
+        client = self._get_client()
+        bucket = client.bucket(self._bucket_name)
+
+        assembled = bytearray()
+        for index in range(total_chunks):
+            blob = bucket.blob(self._chunk_object_name(upload_id, index))
+            try:
+                assembled += blob.download_as_bytes()
+            except NotFound as exc:
+                raise GCSTempStorageError(
+                    f"Chunk {index} of {total_chunks} for upload_id={upload_id} is "
+                    "missing — call upload_chunk for it (or every chunk) before "
+                    "finishing."
+                ) from exc
+
+        self._logger.info(
+            "Assembled chunked upload %s from %d chunks (%d bytes total).",
+            upload_id, total_chunks, len(assembled),
+        )
+        return bytes(assembled)
+
+    async def assemble_chunks(self, upload_id: str, total_chunks: int) -> bytes:
+        """Reads and concatenates all staged chunks, in index order. Does
+        NOT delete them — call cleanup_chunks once the assembled bytes
+        have been used (e.g. after uploading the optimized version)."""
+        return await asyncio.to_thread(self._assemble_chunks_sync, upload_id, total_chunks)
+
+    def _cleanup_chunks_sync(self, upload_id: str, total_chunks: int) -> None:
+        client = self._get_client()
+        bucket = client.bucket(self._bucket_name)
+        for index in range(total_chunks):
+            try:
+                bucket.blob(self._chunk_object_name(upload_id, index)).delete()
+            except NotFound:
+                pass
+
+    async def cleanup_chunks(self, upload_id: str, total_chunks: int) -> None:
+        await asyncio.to_thread(self._cleanup_chunks_sync, upload_id, total_chunks)
 
     def _download_temp_image_sync(self, object_name: str) -> tuple[bytes, str]:
         client = self._get_client()

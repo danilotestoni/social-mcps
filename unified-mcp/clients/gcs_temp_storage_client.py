@@ -3,24 +3,17 @@ from __future__ import annotations
 import asyncio
 import datetime
 import mimetypes
+import time
 import uuid
-from typing import Any
 
-import google.auth
-from google.auth.credentials import Signing
-from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
 
 from core.logger import get_logger
+from core.temp_image_tokens import mint
 
 _OBJECT_PREFIX = "tmp"
-_MAX_TTL_SECONDS = 7 * 24 * 3600  # 604800s — GCS's own V4 signed URL ceiling
-
-# storage.Client()'s own credentials carry storage-only scopes, which the
-# IAM signBlob call rejects with "insufficient authentication scopes" — the
-# signing delegation needs its own, separately-scoped credentials.
-_SIGNING_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+_MAX_TTL_SECONDS = 7 * 24 * 3600  # 604800s, matched to GCS's own V4 signed URL ceiling
 
 
 class GCSTempStorageError(Exception):
@@ -35,15 +28,27 @@ class GCSTempStorageClient:
     Threads, ...) have something to point at without ever making the
     bucket itself public.
 
-    The bucket must stay private (no allUsers/allAuthenticatedUsers
-    binding); access is granted per-object through short-lived V4 signed
-    URLs. Objects are meant to be deleted right after publishing via
+    The bucket stays private (no allUsers/allAuthenticatedUsers binding).
+    Public access is granted per-object through this server's own
+    /temp-image/<token> proxy route (see server.py's TempImageProxyMiddleware)
+    rather than GCS's native V4 signed URLs: Instagram's Graph API media-
+    container endpoint was observed failing every single fetch of a raw V4
+    signed URL with a generic "OAuthException code 1" — consistent with an
+    intermediate over-decoding the nested percent-encoding V4 signed URLs
+    require in X-Goog-Credential (which itself contains pre-encoded "@"
+    and "/"), corrupting the signature before it reaches GCS. Routing
+    through our own plain, single-segment URL sidesteps that class of bug
+    entirely — the actual authenticated GCS read happens server-side, no
+    signed URL involved in it at all.
+
+    Objects are meant to be deleted right after publishing via
     delete_temp_image — a bucket lifecycle rule is the safety net for
     anything left behind by a crashed/aborted flow.
     """
 
-    def __init__(self, bucket_name: str) -> None:
+    def __init__(self, bucket_name: str, public_base_url: str = "") -> None:
         self._bucket_name = bucket_name
+        self._public_base_url = public_base_url.rstrip("/")
         self._logger = get_logger(__name__)
         self._client: storage.Client | None = None
 
@@ -52,41 +57,15 @@ class GCSTempStorageClient:
             self._client = storage.Client()
         return self._client
 
-    def _signing_kwargs(self) -> dict[str, Any]:
-        """
-        google-cloud-storage can only sign directly when the active
-        credentials carry a private key (e.g. a service-account JSON key
-        file via GOOGLE_APPLICATION_CREDENTIALS — the standard local-dev
-        setup). On Cloud Run the attached service account has no private
-        key, so signing must be delegated to the IAM signBlob API by
-        passing service_account_email + access_token explicitly — this is
-        google-cloud-storage's own documented mechanism for signing
-        without a key file. Requires the "Service Account Token Creator"
-        role (roles/iam.serviceAccountTokenCreator) granted to the service
-        account on itself.
-
-        Fetches its own credentials (scoped to cloud-platform) rather than
-        reusing the storage client's — those carry storage-only scopes,
-        which the IAM signBlob call rejects as insufficient.
-        """
-        credentials, _project = google.auth.default(scopes=_SIGNING_SCOPES)
-        if isinstance(credentials, Signing):
-            return {}
-
-        credentials.refresh(GoogleAuthRequest())
-        service_account_email = getattr(credentials, "service_account_email", None)
-        if not service_account_email or not credentials.token:
+    def _proxy_url(self, object_name: str, expires_at: int) -> str:
+        if not self._public_base_url:
             raise GCSTempStorageError(
-                "Cannot sign URLs with the current credentials — no private key "
-                "and no impersonable service account email. Locally, set "
-                "GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON key "
-                "file; on Cloud Run, grant the attached service account "
-                "roles/iam.serviceAccountTokenCreator on itself."
+                "PUBLIC_BASE_URL is not set — cannot build a /temp-image/ proxy "
+                "URL. Set it to this server's own public origin (e.g. the Cloud "
+                "Run service URL)."
             )
-        return {
-            "service_account_email": service_account_email,
-            "access_token": credentials.token,
-        }
+        token = mint(object_name, expires_at)
+        return f"{self._public_base_url}/temp-image/{token}"
 
     def _upload_temp_image_sync(
         self,
@@ -108,14 +87,11 @@ class GCSTempStorageClient:
             blob.metadata = {"original_filename": filename}
         blob.upload_from_string(data, content_type=mime_type)
 
-        expiration = datetime.timedelta(seconds=ttl_seconds)
-        signed_url = blob.generate_signed_url(
-            version="v4",
-            expiration=expiration,
-            method="GET",
-            **self._signing_kwargs(),
-        )
-        expires_at = (datetime.datetime.now(datetime.timezone.utc) + expiration).isoformat()
+        expires_at = int(time.time()) + ttl_seconds
+        proxy_url = self._proxy_url(object_name, expires_at)
+        expires_at_iso = datetime.datetime.fromtimestamp(
+            expires_at, tz=datetime.timezone.utc
+        ).isoformat()
 
         self._logger.info(
             "Uploaded temp image %s to gs://%s/%s (%d bytes, expires in %ds).",
@@ -128,11 +104,11 @@ class GCSTempStorageClient:
         return {
             "object_name": object_name,
             "bucket": self._bucket_name,
-            "signed_url": signed_url,
-            "public_url": signed_url,
+            "signed_url": proxy_url,
+            "public_url": proxy_url,
             "mime_type": mime_type,
             "size_bytes": len(data),
-            "expires_at": expires_at,
+            "expires_at": expires_at_iso,
         }
 
     async def upload_temp_image(
@@ -144,12 +120,30 @@ class GCSTempStorageClient:
     ) -> dict:
         """
         Uploads bytes to the private temp bucket and returns a short-lived
-        V4 signed GET URL. Runs the blocking google-cloud-storage calls in
-        a worker thread so the async MCP event loop isn't blocked.
+        proxy URL (this server's own /temp-image/<token> route — see the
+        class docstring for why that's used instead of a raw GCS signed
+        URL). Runs the blocking google-cloud-storage calls in a worker
+        thread so the async MCP event loop isn't blocked.
         """
         return await asyncio.to_thread(
             self._upload_temp_image_sync, data, mime_type, filename, ttl_seconds
         )
+
+    def _download_temp_image_sync(self, object_name: str) -> tuple[bytes, str]:
+        client = self._get_client()
+        blob = client.bucket(self._bucket_name).blob(object_name)
+        blob.reload()
+        data = blob.download_as_bytes()
+        return data, blob.content_type or "application/octet-stream"
+
+    async def download_temp_image(self, object_name: str) -> tuple[bytes, str]:
+        """
+        Fetches an object's bytes and content type directly via the
+        authenticated Cloud Storage API — used by the /temp-image/ proxy
+        route to serve the file to external fetchers (e.g. Instagram)
+        without ever generating a GCS signed URL for them.
+        """
+        return await asyncio.to_thread(self._download_temp_image_sync, object_name)
 
     def _delete_temp_image_sync(self, object_name: str) -> dict:
         client = self._get_client()

@@ -146,7 +146,9 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     if _ENABLED["GCS_TEMP_STORAGE"]:
         from clients.gcs_temp_storage_client import GCSTempStorageClient
 
-        context["gcs_temp_storage"] = GCSTempStorageClient(env["GCS_TEMP_BUCKET"])
+        context["gcs_temp_storage"] = GCSTempStorageClient(
+            env["GCS_TEMP_BUCKET"], public_base_url=env.get("PUBLIC_BASE_URL", "")
+        )
 
     yield context
 
@@ -530,6 +532,64 @@ class BearerAuthMiddleware:
         await self._app(scope, receive, send)
 
 
+class TempImageProxyMiddleware:
+    """
+    Serves gs://<GCS_TEMP_BUCKET>/tmp/... objects at a plain, single-segment
+    URL (/temp-image/<token>) instead of exposing GCS's own V4 signed URL to
+    external fetchers — see GCSTempStorageClient's docstring for why (in
+    short: Instagram's Graph API media-container endpoint reliably failed
+    to fetch raw V4 signed URLs).
+
+    Deliberately NOT behind BearerAuthMiddleware — external services (e.g.
+    Meta's own fetcher) can't send our internal bearer token. Access
+    control instead comes from the token itself: HMAC-signed, short-lived,
+    naming exactly one object (see core/temp_image_tokens.py).
+    """
+
+    def __init__(self, app, gcs_client) -> None:
+        self._app = app
+        self._gcs_client = gcs_client
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/temp-image/"):
+            await self._handle(scope, send)
+            return
+        await self._app(scope, receive, send)
+
+    async def _handle(self, scope, send) -> None:
+        from core.temp_image_tokens import TempImageTokenError, verify
+
+        async def not_found() -> None:
+            await send({
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [(b"content-type", b"text/plain")],
+            })
+            await send({"type": "http.response.body", "body": b"Not found or expired."})
+
+        token = scope["path"][len("/temp-image/"):]
+        try:
+            object_name = verify(token)
+        except TempImageTokenError as exc:
+            _logger.info("Rejected /temp-image/ request: %s", exc)
+            await not_found()
+            return
+
+        try:
+            data, content_type = await self._gcs_client.download_temp_image(object_name)
+        except Exception as exc:
+            _logger.warning("Could not serve temp image %s: %s", object_name, exc)
+            await not_found()
+            return
+
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", content_type.encode("latin-1"))],
+        })
+        await send({"type": "http.response.body", "body": data})
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -550,5 +610,13 @@ if __name__ == "__main__":
                 "MCP_AUTH_TOKEN is not set — the HTTP endpoint is UNAUTHENTICATED. "
                 "Anyone who discovers the URL can use these tools."
             )
+        if _ENABLED["GCS_TEMP_STORAGE"]:
+            from clients.gcs_temp_storage_client import GCSTempStorageClient
+
+            _env = env_values(_ENV_PATH)
+            _temp_image_client = GCSTempStorageClient(
+                _env["GCS_TEMP_BUCKET"], public_base_url=_env.get("PUBLIC_BASE_URL", "")
+            )
+            app = TempImageProxyMiddleware(app, _temp_image_client)
         port = int(os.getenv("PORT", "8000"))
         uvicorn.run(app, host="0.0.0.0", port=port)

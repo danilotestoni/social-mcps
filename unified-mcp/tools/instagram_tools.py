@@ -40,7 +40,9 @@ async def publish_post(
         return ToolResult(success=True, data={"media_id": media_id}).model_dump()
     except httpx.HTTPStatusError as exc:
         _logger.error("Instagram API error in publish_post: %s", exc.response.text)
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(
+            success=False, error=f"{exc} — response body: {exc.response.text}"
+        ).model_dump()
     except InstagramAPIError as exc:
         _logger.error("Instagram container error in publish_post: %s", exc)
         return ToolResult(success=False, error=str(exc)).model_dump()
@@ -55,7 +57,9 @@ async def get_last_posts(client: InstagramClient, count: int = 10) -> dict:
         return ToolResult(success=True, data=[i.model_dump() for i in items]).model_dump()
     except httpx.HTTPStatusError as exc:
         _logger.error("Instagram API error in get_last_posts: %s", exc.response.text)
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(
+            success=False, error=f"{exc} — response body: {exc.response.text}"
+        ).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in get_last_posts")
         return ToolResult(success=False, error=str(exc)).model_dump()
@@ -67,7 +71,9 @@ async def delete_post(client: InstagramClient, media_id: str) -> dict:
         return ToolResult(success=True, data={"deleted": media_id}).model_dump()
     except httpx.HTTPStatusError as exc:
         _logger.error("Instagram API error in delete_post: %s", exc.response.text)
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(
+            success=False, error=f"{exc} — response body: {exc.response.text}"
+        ).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in delete_post")
         return ToolResult(success=False, error=str(exc)).model_dump()
@@ -79,7 +85,9 @@ async def get_account_info(client: InstagramClient) -> dict:
         return ToolResult(success=True, data=info.model_dump()).model_dump()
     except httpx.HTTPStatusError as exc:
         _logger.error("Instagram API error in get_account_info: %s", exc.response.text)
-        return ToolResult(success=False, error=str(exc)).model_dump()
+        return ToolResult(
+            success=False, error=f"{exc} — response body: {exc.response.text}"
+        ).model_dump()
     except Exception as exc:
         _logger.exception("Unexpected error in get_account_info")
         return ToolResult(success=False, error=str(exc)).model_dump()

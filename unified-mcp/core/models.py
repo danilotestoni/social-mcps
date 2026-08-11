@@ -117,3 +117,40 @@ class WPPostItem(BaseModel):
     short_url: str
     status: str
     date: str
+
+
+# ── Content Queue (shared pipeline state, GCS-backed) ─────────────────────────
+#
+# Storage contract for queue_* tools — one Markdown file per news item in
+# gs://<QUEUE_GCS_BUCKET>/queue/<id>.md, YAML frontmatter + body. `version`
+# is the GCS object generation number, not a field stored in the frontmatter
+# itself — queue_update/mark_published/mark_discarded require the caller's
+# expected_version to match it exactly (enforced atomically via GCS
+# if_generation_match) before a write is accepted, so two agents editing the
+# same item can't silently clobber each other.
+
+QUEUE_ESTADOS = ("pendiente", "preparada", "publicada", "descartada", "error")
+QUEUE_CANALES = ("wordpress", "linkedin", "facebook", "instagram", "threads", "x")
+
+
+class QueueChannelResult(BaseModel):
+    estado: str = "pendiente"  # pendiente | publicado | error
+    id: str | None = None
+    url: str | None = None
+    error: str | None = None
+
+
+class QueueImage(BaseModel):
+    proveedor: str | None = None  # pollinations | gemini | canva
+    url: str | None = None
+    canva_id: str | None = None
+
+
+class QueueItemSummary(BaseModel):
+    id: str
+    version: int
+    estado: str
+    orden: int
+    fecha_prevista: str | None = None
+    fecha_publicada: str | None = None
+    url_wordpress: str | None = None

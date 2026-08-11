@@ -67,6 +67,17 @@ def _gcs_temp_storage_enabled() -> bool:
 
 
 _ENABLED["GCS_TEMP_STORAGE"] = _gcs_temp_storage_enabled()
+
+
+def _queue_enabled() -> bool:
+    """
+    Enabled only when QUEUE_GCS_BUCKET is set — the shared content queue is
+    opt-in infrastructure, not part of every deployment.
+    """
+    return bool((env_values(_ENV_PATH).get("QUEUE_GCS_BUCKET") or "").strip())
+
+
+_ENABLED["QUEUE"] = _queue_enabled()
 _logger.info(
     "Enabled platforms: %s",
     ", ".join(k for k, v in _ENABLED.items() if v) or "none",
@@ -149,6 +160,11 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
         context["gcs_temp_storage"] = GCSTempStorageClient(
             env["GCS_TEMP_BUCKET"], public_base_url=env.get("PUBLIC_BASE_URL", "")
         )
+
+    if _ENABLED["QUEUE"]:
+        from clients.gcs_queue_client import GCSQueueClient
+
+        context["queue"] = GCSQueueClient(env["QUEUE_GCS_BUCKET"])
 
     yield context
 
@@ -632,6 +648,160 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
             filename,
             ttl_seconds,
             auto_optimize,
+        )
+
+
+# ── Content queue (shared pipeline state, GCS-backed) ──────────────────────────
+#
+# Shared operational state for the weekly news pipeline: both Claude
+# (this server, local stdio) and ChatGPT (this same server, remote, via the
+# Social-Mcps-Cloud connector over Cloud Run) call these tools against the
+# ONE bucket, so there is a single source of truth for the queue instead of
+# two local copies that inevitably diverge. See core/models.py for the
+# QUEUE_ESTADOS/QUEUE_CANALES contract and clients/gcs_queue_client.py for
+# the optimistic-concurrency (expected_version) design.
+
+if _ENABLED["QUEUE"]:
+    import tools.queue_tools as queue
+
+    @mcp.tool()
+    async def queue_list(estado: str | None = None) -> dict:
+        """
+        Lists queue items (metadata only, not full content), ordered by
+        `orden` ascending. Pass estado to filter — one of: pendiente,
+        preparada, publicada, descartada, error. Omit for all items.
+        Each item includes its current `version` — pass that exact value
+        as expected_version to queue_update/queue_mark_published/
+        queue_mark_discarded to avoid clobbering a concurrent edit.
+        """
+        ctx = mcp.get_context()
+        return await queue.queue_list(ctx.request_context.lifespan_context["queue"], estado)
+
+    @mcp.tool()
+    async def queue_get(id: str) -> dict:
+        """
+        Returns the full frontmatter (estado, orden, fechas, imagen,
+        resultados por canal, version...) plus the complete Markdown
+        content (analysis + per-platform copy + image prompt) for one
+        queue item by id.
+        """
+        ctx = mcp.get_context()
+        return await queue.queue_get(ctx.request_context.lifespan_context["queue"], id)
+
+    @mcp.tool()
+    async def queue_create(
+        id: str,
+        orden: int,
+        fecha_prevista: str,
+        contenido_markdown: str,
+        updated_by: str,
+        imagen: dict | None = None,
+    ) -> dict:
+        """
+        Creates a new queue item with estado=pendiente. Fails if id already
+        exists (ids must be unique — recommended format:
+        YYYY-MM-DD-noticia-N, matching the weekly scan's Monday date and
+        the item's priority order).
+        contenido_markdown is the self-contained body: title, source,
+        analysis, and the finished copy for every social platform, plus
+        the image prompt — exactly what a daily publish run needs, with no
+        dependency on the weekly report.
+        imagen (optional) is {proveedor, url, canva_id} — all null if the
+        image isn't generated yet.
+        updated_by identifies the calling agent (e.g. "claude" or
+        "chatgpt") for the audit trail.
+        """
+        ctx = mcp.get_context()
+        return await queue.queue_create(
+            ctx.request_context.lifespan_context["queue"],
+            id, orden, fecha_prevista, contenido_markdown, updated_by, imagen,
+        )
+
+    @mcp.tool()
+    async def queue_update(
+        id: str,
+        expected_version: int,
+        updated_by: str,
+        estado: str | None = None,
+        orden: int | None = None,
+        fecha_prevista: str | None = None,
+        contenido_markdown: str | None = None,
+        imagen: dict | None = None,
+        notas: str | None = None,
+    ) -> dict:
+        """
+        Partial update of a queue item — only pass the fields that changed
+        (text correction, new image, reordering, moving to estado=
+        preparada, etc.). expected_version MUST be the `version` you most
+        recently got from queue_get/queue_list for this id: if another
+        agent wrote to it in the meantime, this call fails with a conflict
+        error instead of silently overwriting their change — re-read with
+        queue_get and retry. For marking a publish result or a discard,
+        use queue_mark_published / queue_mark_discarded instead (they set
+        several related fields atomically and correctly). notas is free
+        text for context that doesn't fit elsewhere (e.g. "redundante con
+        publicación previa") — every other field stays strict on purpose.
+        """
+        ctx = mcp.get_context()
+        return await queue.queue_update(
+            ctx.request_context.lifespan_context["queue"],
+            id, expected_version, updated_by, estado, orden, fecha_prevista, contenido_markdown, imagen, notas,
+        )
+
+    @mcp.tool()
+    async def queue_mark_published(
+        id: str,
+        expected_version: int,
+        updated_by: str,
+        url_wordpress: str,
+        fecha_publicada: str,
+        canales: dict,
+    ) -> dict:
+        """
+        Marks a queue item as published: sets estado=publicada,
+        url_wordpress, fecha_publicada, and REPLACES the whole per-channel
+        results map with `canales` (pass a result for every channel this
+        publish run attempted — e.g.
+        {"wordpress": {"estado": "publicado", "id": "123", "url": "..."},
+         "linkedin": {"estado": "error", "error": "OAuth expired"}, ...}).
+        Same expected_version conflict protection as queue_update.
+        """
+        ctx = mcp.get_context()
+        return await queue.queue_mark_published(
+            ctx.request_context.lifespan_context["queue"],
+            id, expected_version, updated_by, url_wordpress, fecha_publicada, canales,
+        )
+
+    @mcp.tool()
+    async def queue_mark_discarded(
+        id: str,
+        expected_version: int,
+        updated_by: str,
+        motivo: str,
+        fecha_descartada: str | None = None,
+    ) -> dict:
+        """
+        Marks a queue item as descartada (no longer worth publishing —
+        e.g. the news went stale) with a required reason. Same
+        expected_version conflict protection as queue_update.
+        """
+        ctx = mcp.get_context()
+        return await queue.queue_mark_discarded(
+            ctx.request_context.lifespan_context["queue"],
+            id, expected_version, updated_by, motivo, fecha_descartada,
+        )
+
+    @mcp.tool()
+    async def queue_archive_week(week_start: str, updated_by: str) -> dict:
+        """
+        Moves every item currently in the queue to archive/<week_start>/,
+        clearing the queue for the new week's scan. week_start should be
+        the ISO date (YYYY-MM-DD) of the Monday that just ran. Intended
+        for the weekly scan pipeline, not the daily publisher.
+        """
+        ctx = mcp.get_context()
+        return await queue.queue_archive_week(
+            ctx.request_context.lifespan_context["queue"], week_start, updated_by
         )
 
 

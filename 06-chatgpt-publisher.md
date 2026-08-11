@@ -383,6 +383,40 @@ Actualizar el log de publicación indicando:
 
 ---
 
+## 18. Actualización de la cola compartida (`queue_*`)
+
+Cuando la publicación se ejecute desde ChatGPT usando este flujo, la cola compartida debe actualizarse al terminar el intento de publicación.
+
+La cola vive en las herramientas `queue_*` del conector Social-Mcps-Cloud, respaldadas por `gs://social-mcps-queue`.
+
+Antes de publicar, ChatGPT debe haber leído la noticia con `queue_get(id)` y debe conservar la `version` devuelta por esa llamada. Esa `version` se usa después como `expected_version` para evitar sobrescribir cambios hechos por Claude u otro agente mientras la publicación estaba en curso.
+
+### Marcar noticia como publicada
+
+Después de publicar WordPress y de intentar los canales sociales correspondientes, llamar a:
+
+```
+queue_mark_published(
+  id=<id>,
+  expected_version=<version_de_queue_get>,
+  updated_by="chatgpt",
+  url_wordpress=<URL definitiva del artículo en WordPress>,
+  fecha_publicada=<fecha/hora ISO>,
+  canales={
+    "wordpress": {"estado": "publicado|error", "url": "<URL>", "id": "<ID si existe>", "error": "<mensaje si falla>"},
+    "linkedin": {"estado": "publicado|error|saltado", "id": "<ID/URN si existe>", "error": "<mensaje si falla>"},
+    "facebook": {"estado": "publicado|error|verificar|saltado", "id": "<ID si existe>", "error": "<mensaje si falla>"},
+    "instagram": {"estado": "publicado|error|saltado", "id": "<media_id si existe>", "error": "<mensaje si falla>"},
+    "threads": {"estado": "publicado|error|saltado", "id": "<thread_id si existe>", "error": "<mensaje si falla>"},
+    "x": {"estado": "publicado|error|manual|saltado", "url": "<URL si existe>", "error": "<mensaje si falla>"}
+  }
+)
+```
+
+Si la llamada falla por conflicto de versión (`expected_version` no coincide con la versión real): no reintentar a ciegas. Releer con `queue_get`, comprobar qué cambió y avisar al usuario en vez de sobrescribir.
+
+---
+
 ## Regla de selección entre Publishers
 
 ### ChatGPT / OpenAI compatible

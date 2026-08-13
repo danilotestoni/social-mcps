@@ -84,8 +84,10 @@ class WordPressClient:
             )
         self._raise_for_status(response)
 
-    async def _upload_media_bytes(self, data: bytes, filename: str) -> int:
-        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    async def _upload_media_bytes(
+        self, data: bytes, filename: str, content_type: str | None = None
+    ) -> int:
+        content_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"/sites/{self._site_id}/media/new",
@@ -123,8 +125,19 @@ class WordPressClient:
             response = await client.get(image_url, timeout=30.0)
             response.raise_for_status()
             image_bytes = response.content
-        filename = image_url.split("/")[-1].split("?")[0] or "image.jpg"
-        return await self._upload_media_bytes(image_bytes, filename)
+        content_type = response.headers.get("content-type", "").split(";")[0].strip() or None
+        url_name = image_url.split("/")[-1].split("?")[0]
+        # Opaque URLs — notably our own /temp-image/<token> proxy — end in a
+        # signed token rather than a real filename, so mimetypes can't infer
+        # anything from url_name. Trust the server's actual Content-Type
+        # instead of guessing one from the URL, and build a filename from
+        # it too: WordPress.com's /media/new has rejected uploads whose
+        # filename has no recognizable image extension.
+        if content_type and not (url_name and mimetypes.guess_type(url_name)[0]):
+            filename = f"image{mimetypes.guess_extension(content_type) or ''}"
+        else:
+            filename = url_name or "image.jpg"
+        return await self._upload_media_bytes(image_bytes, filename, content_type)
 
     @_retried_publish
     async def create_post(

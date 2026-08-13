@@ -125,18 +125,28 @@ class WordPressClient:
             response = await client.get(image_url, timeout=30.0)
             response.raise_for_status()
             image_bytes = response.content
-        content_type = response.headers.get("content-type", "").split(";")[0].strip() or None
+        response_content_type = response.headers.get("content-type", "").split(";")[0].strip()
         url_name = image_url.split("/")[-1].split("?")[0]
-        # Opaque URLs — notably our own /temp-image/<token> proxy — end in a
-        # signed token rather than a real filename, so mimetypes can't infer
-        # anything from url_name. Trust the server's actual Content-Type
-        # instead of guessing one from the URL, and build a filename from
-        # it too: WordPress.com's /media/new has rejected uploads whose
-        # filename has no recognizable image extension.
-        if content_type and not (url_name and mimetypes.guess_type(url_name)[0]):
-            filename = f"image{mimetypes.guess_extension(content_type) or ''}"
+        url_content_type = mimetypes.guess_type(url_name)[0] if url_name else None
+
+        # Prefer a specific image/* Content-Type reported by the server —
+        # the only reliable signal for opaque URLs (notably our own
+        # /temp-image/<token> proxy, whose last path segment is a signed
+        # token, not a real filename). But plenty of ordinary image hosts
+        # send a generic "application/octet-stream" regardless of the
+        # actual file, so don't let that override a perfectly good
+        # extension already present in the URL.
+        if response_content_type.startswith("image/"):
+            content_type = response_content_type
         else:
-            filename = url_name or "image.jpg"
+            content_type = url_content_type or response_content_type or None
+
+        if url_content_type:
+            filename = url_name
+        else:
+            ext = mimetypes.guess_extension(content_type) if content_type else None
+            filename = f"image{ext}" if ext else (url_name or "image.jpg")
+
         return await self._upload_media_bytes(image_bytes, filename, content_type)
 
     @_retried_publish

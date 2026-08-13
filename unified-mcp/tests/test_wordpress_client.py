@@ -82,6 +82,42 @@ class UploadMediaFromUrlTests(TestCase):
         self.assertNotIn(b"application/octet-stream", body)
         self.assertIn(b'filename="image.jpg"', body)
 
+    def test_generic_content_type_does_not_override_valid_url_extension(self) -> None:
+        """
+        Plenty of ordinary image hosts send a generic
+        "application/octet-stream" Content-Type regardless of the actual
+        file. When the URL already has a real image extension, that must
+        win — otherwise a perfectly valid image/png upload gets sent as
+        application/octet-stream (and, worse, renamed to "image.bin"),
+        recreating the exact rejection this fix is meant to avoid.
+        """
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "example.com":
+                return httpx.Response(
+                    200,
+                    content=b"fakepngbytes",
+                    headers={"content-type": "application/octet-stream"},
+                )
+            if request.url.path.endswith("/media/new"):
+                captured["body"] = request.content
+                return httpx.Response(200, json={"media": [{"ID": 9}]})
+            raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+        client = WordPressClient(_FakeTokenManager(), site_id="123")
+
+        with _install_mock_transport(handler):
+            media_id = asyncio.run(
+                client.upload_media_from_url("https://example.com/foo/photo.png")
+            )
+
+        self.assertEqual(media_id, 9)
+        body = captured["body"]
+        self.assertIn(b'Content-Type: image/png', body)
+        self.assertIn(b'filename="photo.png"', body)
+        self.assertNotIn(b"image.bin", body)
+
     def test_normal_url_keeps_filename_from_path(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.host == "example.com":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 import httpx
 
@@ -17,6 +18,13 @@ _REQUEST_TIMEOUT = 30.0        # seconds — Threads API can be slow on containe
 
 class ThreadsAPIError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class PublishedThread:
+    thread_id: str
+    permalink: str | None = None
+    recovered_after_ambiguous_error: bool = False
 
 
 class ThreadsClient:
@@ -107,7 +115,7 @@ class ThreadsClient:
         self._raise_for_status(response)
         return response.json()["id"]
 
-    async def _wait_for_container(self, container_id: str) -> None:
+    async def _wait_for_container(self, container_id: str) -> str:
         headers = await self._auth_headers()
         for attempt in range(_CONTAINER_POLL_MAX):
             async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
@@ -119,9 +127,9 @@ class ThreadsClient:
             self._raise_for_status(response)
             data = response.json()
             status = data.get("status", "")
-            if status in ("FINISHED", ""):
+            if status in ("FINISHED", "", "PUBLISHED"):
                 # Empty status means the container is ready (common for TEXT posts)
-                return
+                return status
             if status in ("ERROR", "EXPIRED"):
                 error_type = data.get("error_type", "unknown")
                 raise ThreadsAPIError(
@@ -149,11 +157,66 @@ class ThreadsClient:
         self._raise_for_status(response)
         return response.json()["id"]
 
-    async def publish_thread(self, text: str, image_url: str | None = None) -> str:
+    async def _find_existing_thread(self, text: str) -> ThreadItem | None:
+        for thread in await self.get_threads(count=20):
+            if thread.text == text:
+                return thread
+        return None
+
+    async def publish_thread_details(
+        self, text: str, image_url: str | None = None
+    ) -> PublishedThread:
         container_id = await self._create_container(text, image_url)
         self._logger.debug("Threads container created: %s", container_id)
-        if image_url:
-            await self._wait_for_container(container_id)
-        thread_id = await self._publish_container(container_id)
+        await self._wait_for_container(container_id)
+        recovered_thread: ThreadItem | None = None
+        try:
+            thread_id = await self._publish_container(container_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400:
+                raise
+            self._logger.warning(
+                "Threads publish returned 400 for container %s; checking status before retrying",
+                container_id,
+            )
+            status = await self._wait_for_container(container_id)
+            if status == "PUBLISHED":
+                existing_thread = await self._find_existing_thread(text)
+                if existing_thread is None:
+                    raise
+                self._logger.warning(
+                    "Threads container %s is already published as %s at %s",
+                    container_id,
+                    existing_thread.id,
+                    existing_thread.permalink,
+                )
+                return PublishedThread(
+                    thread_id=existing_thread.id,
+                    permalink=existing_thread.permalink,
+                    recovered_after_ambiguous_error=True,
+                )
+            try:
+                thread_id = await self._publish_container(container_id)
+            except httpx.HTTPStatusError as retry_error:
+                if retry_error.response.status_code != 400:
+                    raise
+                existing_thread = await self._find_existing_thread(text)
+                if existing_thread is None:
+                    raise
+                self._logger.warning(
+                    "Threads publish returned an ambiguous 400, but post %s already exists at %s",
+                    existing_thread.id,
+                    existing_thread.permalink,
+                )
+                recovered_thread = existing_thread
+                thread_id = existing_thread.id
         self._logger.info("Thread published successfully: %s", thread_id)
-        return thread_id
+        return PublishedThread(
+            thread_id=thread_id,
+            permalink=recovered_thread.permalink if recovered_thread else None,
+            recovered_after_ambiguous_error=recovered_thread is not None,
+        )
+
+    async def publish_thread(self, text: str, image_url: str | None = None) -> str:
+        """Publish a thread and return its ID for existing callers."""
+        return (await self.publish_thread_details(text, image_url)).thread_id

@@ -10,6 +10,14 @@ from core.models import ToolResult
 _logger = get_logger(__name__)
 
 
+def _meta_error_payload(response: httpx.Response) -> dict:
+    try:
+        payload = response.json()
+    except ValueError:
+        return {"raw": response.text}
+    return payload if isinstance(payload, dict) else {"raw": payload}
+
+
 async def publish_post(
     client: ThreadsClient,
     text: str,
@@ -27,11 +35,20 @@ async def publish_post(
                     "media_type": "IMAGE" if image_url else "TEXT",
                 },
             }).model_dump()
-        thread_id = await client.publish_thread(text, image_url)
-        return ToolResult(success=True, data={"thread_id": thread_id}).model_dump()
+        published = await client.publish_thread_details(text, image_url)
+        data = {"thread_id": published.thread_id}
+        if published.permalink:
+            data["permalink"] = published.permalink
+        if published.recovered_after_ambiguous_error:
+            data["recovered_after_ambiguous_error"] = True
+        return ToolResult(success=True, data=data).model_dump()
     except httpx.HTTPStatusError as exc:
         _logger.error("Threads API error in publish_post: %s", exc.response.text)
-        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
+        return ToolResult(
+            success=False,
+            data={"meta_error": _meta_error_payload(exc.response)},
+            error=describe_exception(exc),
+        ).model_dump()
     except ThreadsAPIError as exc:
         _logger.error("Threads container error in publish_post: %s", exc)
         return ToolResult(success=False, error=describe_exception(exc)).model_dump()

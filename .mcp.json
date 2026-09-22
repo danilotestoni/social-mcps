@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "social-mcps-local": {
+      "command": "py",
+      "args": ["-3", "${CLAUDE_PROJECT_DIR}/unified-mcp/server.py"]
+    }
+  }
+}

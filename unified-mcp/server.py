@@ -17,10 +17,15 @@ from mcp.server.transport_security import TransportSecuritySettings
 _ENV_PATH = Path(__file__).parent / ".env"
 load_dotenv(_ENV_PATH)
 
-from core.config import env_values  # noqa: E402
+from core.config import env_values, load_consolidated_secrets  # noqa: E402
 from core.logger import get_logger  # noqa: E402
 
 _logger = get_logger(__name__)
+
+# No-op locally (unified-mcp/.env keeps working unchanged); on Cloud Run this
+# unpacks the single SOCIAL_MCPS_SECRETS_JSON secret into os.environ before
+# any credential is read below.
+load_consolidated_secrets()
 
 _TRUE_VALUES = ("1", "true", "yes", "on")
 

@@ -80,14 +80,33 @@ El bloque `"env"` es opcional si ya tienes un `.env` en `unified-mcp/`. `social-
 "args": ["C:/Users/TuUsuario/social-mcps/unified-mcp/server.py"]
 ```
 
-### Uso remoto (servidor desplegado en Render)
+**Windows + Microsoft Store**: si `python` en PATH resuelve al alias de Microsoft Store (`AppData\Local\Microsoft\WindowsApps\python.exe`), el proceso falla al arrancar aunque exista una instalación real de Python. Usa el lanzador `py` en su lugar (resuelve al intérprete real):
+
+```json
+"command": "py",
+"args": ["-3", "/ruta/absoluta/social-mcps/unified-mcp/server.py"]
+```
+
+### Elegir local vs online (cada agente, cada vez)
+
+`unified-mcp` puede arrancar en dos modos (`stdio` local o `streamable-http` remoto) sin cambiar código — la elección es puramente de configuración del cliente MCP:
+
+- **`social-mcps-local`** — definido en [`.mcp.json`](.mcp.json) en la raíz del repo (control de versiones, sin secretos: usa `unified-mcp/.env` local para credenciales). Claude Code lo detecta automáticamente al abrir este proyecto y pedirá aprobarlo la primera vez. Gratis, requiere el PC encendido.
+- **`social-mcps-online`** *(o `social-mcps`, según cuándo se añadió)* — definido en la config de usuario de Claude Code (`~/.claude.json`, fuera del repo) o como conector remoto en ChatGPT/otra app, apuntando al gateway Cloudflare → Cloud Run. Funciona con el PC apagado; tiene coste de infraestructura (ver más abajo).
+
+Como cada servidor tiene un nombre distinto, sus herramientas quedan namespaced por separado (`mcp__social-mcps-local__*` vs `mcp__social-mcps-online__*`) — pueden estar los dos activos a la vez sin colisión. Para elegir cuál usar en un momento dado:
+
+- **Claude Code**: usa `/mcp` para habilitar/deshabilitar cada servidor en la sesión, o simplemente indica en el prompt cuál usar (p. ej. "usa social-mcps-local para esto").
+- **ChatGPT / otras apps de conectores**: no leen `.mcp.json`; registra ambos como conectores separados (uno local si la app soporta comandos locales, uno remoto con la URL del gateway) y activa/desactiva el que corresponda desde su propio selector de herramientas/conectores por conversación.
+
+### Uso remoto (Cloud Run + gateway Cloudflare)
 
 Añade el servidor como conector MCP remoto en cualquier app que lo soporte (Claude, ChatGPT, etc.):
 
-- **URL**: `https://tu-servicio.onrender.com/mcp`
-- **Header de autenticación**: `Authorization: Bearer <MCP_AUTH_TOKEN>`
+- **URL**: la URL del gateway Cloudflare (`https://social-mcps.<subdominio>.workers.dev/mcp` o el dominio público, ver `docs/superpowers/plans/2026-08-03-cloud-run-social-mcp.md`)
+- **Header de autenticación**: `Authorization: Bearer <token>`
 
-El valor de `MCP_AUTH_TOKEN` es el que Render genera automáticamente en el primer deploy (visible en el dashboard → Environment). Sin ese header, el servidor responde `401 Unauthorized`.
+Sin ese header, el servidor responde `401 Unauthorized`. `render.yaml` documenta una ruta de despliegue alternativa en Render, pero la fuente de verdad actual del despliegue remoto es Google Cloud Run + Cloudflare (ver sección siguiente).
 
 ---
 
@@ -182,7 +201,20 @@ npm run setup-fb    # guarda sesión de Facebook en auth/fb-session.json
 
 ---
 
-## Despliegue en Render
+## Despliegue en Google Cloud Run + Cloudflare (producción actual)
+
+El servidor online real corre en Cloud Run (proyecto `socialmcps`, región `europe-west1`, servicio `unified-mcp`), detrás de un Worker de Cloudflare (`social-mcps`) que hace de gateway/auth — ver `docs/superpowers/plans/2026-08-03-cloud-run-social-mcp.md` y el issue de dominio propio.
+
+**Credenciales**: viven en un único secreto de Secret Manager, `social-mcps-credentials` (JSON con todas las credenciales de plataforma + `MCP_AUTH_TOKEN`), inyectado a Cloud Run como la variable `SOCIAL_MCPS_SECRETS_JSON`. `core/config.py::load_consolidated_secrets()` lo desempaqueta a variables de entorno individuales al arrancar — el resto del código no distingue de dónde vino cada credencial. Antes había 29 secretos individuales; se consolidaron en uno para no pasarse del free tier de Secret Manager (6 versiones activas). Ver `deploy/google-cloud/rotate-secret.sh` para rotar un campo sin volver a crear 29 secretos.
+
+Redeploy típico (rebuild desde código + mismas variables/secretos):
+
+```bash
+gcloud run deploy unified-mcp --source unified-mcp \
+  --project=socialmcps --region=europe-west1
+```
+
+## Despliegue en Render (alternativa)
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/danilotestoni/social-mcps)
 

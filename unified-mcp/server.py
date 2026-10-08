@@ -170,6 +170,8 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
         from clients.gcs_queue_client import GCSQueueClient
 
         context["queue"] = GCSQueueClient(env["QUEUE_GCS_BUCKET"])
+        from tools.editorial_tools import EditorialService
+        context["editorial"] = EditorialService(context["queue"], context, env.get("PUBLIC_BASE_URL", ""))
 
     yield context
 
@@ -211,6 +213,7 @@ def list_enabled_platforms() -> dict:
     current state; it does not change it.
     """
     return {
+        "revision": os.getenv("K_REVISION", "local"),
         "enabled": sorted(k for k, v in _ENABLED.items() if v),
         "disabled": sorted(k for k, v in _ENABLED.items() if not v),
     }
@@ -227,9 +230,16 @@ if _ENABLED["LINKEDIN"]:
         image_url: str | None = None,
         image_path: str | None = None,
         dry_run: bool = False,
+        non_editorial: bool = False,
     ) -> dict:
         """Publish a post to LinkedIn. Supports plain text or image (URL or local path)."""
         ctx = mcp.get_context()
+        if not dry_run:
+            from tools.editorial_tools import guard_generic, result_of
+            checked = await result_of(guard_generic(ctx.request_context.lifespan_context.get("queue"),
+                                                     non_editorial, text, image_url))
+            if not checked["success"]:
+                return checked
         if not dry_run:
             await ctx.report_progress(0, 100, "Publishing to LinkedIn...")
         lc = ctx.request_context.lifespan_context
@@ -266,9 +276,16 @@ if _ENABLED["FACEBOOK"]:
         image_url: str | None = None,
         image_path: str | None = None,
         dry_run: bool = False,
+        non_editorial: bool = False,
     ) -> dict:
         """Publish a post to the Facebook Page. Supports text, image URL, or local image file."""
         ctx = mcp.get_context()
+        if not dry_run:
+            from tools.editorial_tools import guard_generic, result_of
+            checked = await result_of(guard_generic(ctx.request_context.lifespan_context.get("queue"),
+                                                     non_editorial, message, image_url))
+            if not checked["success"]:
+                return checked
         if not dry_run:
             await ctx.report_progress(0, 100, "Publishing to Facebook...")
         return await fb.publish_post(ctx.request_context.lifespan_context["facebook"], message, image_url, image_path, dry_run)
@@ -302,9 +319,16 @@ if _ENABLED["INSTAGRAM"]:
         caption: str,
         image_url: str | None = None,
         dry_run: bool = False,
+        non_editorial: bool = False,
     ) -> dict:
         """Publish a photo post to Instagram. Requires a public image URL."""
         ctx = mcp.get_context()
+        if not dry_run:
+            from tools.editorial_tools import guard_generic, result_of
+            checked = await result_of(guard_generic(ctx.request_context.lifespan_context.get("queue"),
+                                                     non_editorial, caption, image_url))
+            if not checked["success"]:
+                return checked
         if dry_run:
             return await ig.publish_post(
                 ctx.request_context.lifespan_context["instagram"], caption, image_url, None, dry_run
@@ -355,9 +379,16 @@ if _ENABLED["THREADS"]:
         text: str,
         image_url: str | None = None,
         dry_run: bool = False,
+        non_editorial: bool = False,
     ) -> dict:
         """Publish a thread to Threads. Optionally include a public image URL."""
         ctx = mcp.get_context()
+        if not dry_run:
+            from tools.editorial_tools import guard_generic, result_of
+            checked = await result_of(guard_generic(ctx.request_context.lifespan_context.get("queue"),
+                                                     non_editorial, text, image_url))
+            if not checked["success"]:
+                return checked
         if not dry_run:
             await ctx.report_progress(0, 100, "Publishing to Threads...")
         return await th.publish_post(ctx.request_context.lifespan_context["threads"], text, image_url, dry_run)
@@ -394,9 +425,16 @@ if _ENABLED["WORDPRESS"]:
         image_url: str | None = None,
         image_path: str | None = None,
         dry_run: bool = False,
+        non_editorial: bool = False,
     ) -> dict:
         """Publish a post to WordPress.com. Optionally include a featured image."""
         ctx = mcp.get_context()
+        if not dry_run:
+            from tools.editorial_tools import guard_generic, result_of
+            checked = await result_of(guard_generic(ctx.request_context.lifespan_context.get("queue"),
+                                                     non_editorial, content, image_url))
+            if not checked["success"]:
+                return checked
         if not dry_run:
             await ctx.report_progress(0, 100, "Publishing to WordPress...")
         return await wp.publish_post(ctx.request_context.lifespan_context["wordpress"], title, content, status, image_url, image_path, dry_run)
@@ -426,13 +464,19 @@ if _ENABLED["X"]:
     import tools.x_tools as x_tools
 
     @mcp.tool()
-    async def x_post_tweet(text: str, dry_run: bool = False) -> dict:
+    async def x_post_tweet(text: str, dry_run: bool = False, non_editorial: bool = False) -> dict:
         """
         Post a tweet to X (Twitter) via Twikit (no official API key required).
         If Twikit fails, returns a notifier payload instructing to use social-automation-mcp locally.
         Maximum 280 characters.
         """
         ctx = mcp.get_context()
+        if not dry_run:
+            from tools.editorial_tools import guard_generic, result_of
+            checked = await result_of(guard_generic(ctx.request_context.lifespan_context.get("queue"),
+                                                     non_editorial, text, None))
+            if not checked["success"]:
+                return checked
         return await x_tools.post_to_x(ctx.request_context.lifespan_context["x"], text, dry_run)
 
 
@@ -466,6 +510,9 @@ if _ENABLED["IMAGE_GEN"]:
         aspect_ratio: str = "1:1",
         upload_to_wordpress: bool = False,
         dry_run: bool = False,
+        news_id: str | None = None,
+        generation_id: str | None = None,
+        non_editorial: bool = False,
     ):
         """
         Generate an image from an English text prompt. Tries providers in
@@ -486,6 +533,26 @@ if _ENABLED["IMAGE_GEN"]:
         if not dry_run:
             await ctx.report_progress(0, 100, "Generating image...")
         lc = ctx.request_context.lifespan_context
+        pending = None
+        if lc.get("queue") and not dry_run:
+            from core import editorial as flow
+            from tools.editorial_tools import result_of
+
+            async def check_generation():
+                if news_id:
+                    item = await lc["editorial"].resolve(news_id=news_id)
+                    e = item.get("editorial", {})
+                    flow.check(e.get("generation_id") == generation_id and not e.get("image"), "Generación pendiente incorrecta.")
+                    flow.check(prompt == e["visual_prompt"] and e["content_hash"] == flow.content_hash(item),
+                               "Usa el prompt vigente devuelto por editorial_prepare.")
+                    flow.check(not upload_to_wordpress, "Vincula y revisa antes de transferir a WordPress.")
+                    return item
+                flow.check(non_editorial is True, "Generación editorial requiere news_id y generation_id.")
+                return None
+            checked = await result_of(check_generation())
+            if not checked["success"]:
+                return checked
+            pending = checked["data"]
         data, preview_content = await img.generate_image(
             prompt,
             aspect_ratio,
@@ -496,6 +563,19 @@ if _ENABLED["IMAGE_GEN"]:
             upload_to_wordpress=upload_to_wordpress,
             dry_run=dry_run,
         )
+
+        if pending and data.get("success"):
+            async def bind_generated():
+                details = data["data"]
+                image_bytes = Path(details["local_path"]).read_bytes()
+                asset = await lc["queue"].store_asset(news_id, image_bytes, details["mime_type"],
+                                                       "generated:" + generation_id)
+                return await lc["queue"].transition(news_id, pending["version"],
+                              lambda item: flow.bind(item, generation_id, asset, "generate_image"))
+            bound = await result_of(bind_generated())
+            if not bound["success"]:
+                return bound
+            data["data"]["editorial"] = bound["data"]["editorial"]
 
         if preview_content is None:
             return data
@@ -668,6 +748,51 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
 
 if _ENABLED["QUEUE"]:
     import tools.queue_tools as queue
+    from tools.editorial_tools import result_of
+
+    def _editorial():
+        return mcp.get_context().request_context.lifespan_context["editorial"]
+
+    @mcp.tool()
+    async def editorial_resolve(fecha_prevista: str | None = None, news_id: str | None = None) -> dict:
+        """Resolve exactly one active news item from the queue before generating any editorial image.
+        Use an explicit local YYYY-MM-DD date or news_id. Ambiguity/published/discarded blocks the flow.
+        Conversation memory is never a substitute for this call.
+        """
+        return await result_of(_editorial().resolve(fecha_prevista, news_id))
+
+    @mcp.tool()
+    async def editorial_prepare(news_id: str, expected_version: int, payloads: dict, actor: str) -> dict:
+        """Start a news-bound image generation. Returns generation_id, revisions and queue-derived visual_prompt.
+        payloads contains exact final text per platform: {channel: {text: ...}}, WordPress: {title, content}.
+        Never generate from conversation memory. Re-preparing invalidates the previous image approval.
+        """
+        return await result_of(_editorial().prepare(news_id, expected_version, payloads, actor))
+
+    @mcp.tool()
+    async def editorial_bind_image(news_id: str, expected_version: int, generation_id: str,
+                                   source_url: str, actor: str) -> dict:
+        """Download a ChatGPT Share/OpenAI/WordPress image for this pending generation only.
+        Stores immutable actual bytes and their hash. This does NOT inspect or approve the visual content.
+        """
+        return await result_of(_editorial().bind(news_id, expected_version, generation_id, source_url, actor))
+
+    @mcp.tool()
+    async def editorial_request_review(news_id: str) -> dict:
+        """Get a temporary human review/reconciliation link. Show it to the user.
+        Agents MUST NOT fill/submit this form or claim that metadata proves visual correspondence.
+        The user inspects the actual image and explicitly authorizes selected channels.
+        """
+        return await result_of(_editorial().review_link(news_id))
+
+    @mcp.tool()
+    async def editorial_publish(news_id: str, news_revision: int, image_revision: int,
+                                channel: str, actor: str, dry_run: bool = False) -> dict:
+        """Only publication route for queue news. Server checks persistent approval, actual asset hash,
+        exact payload and revisions, then reserves atomically. Never replay an uncertain result.
+        dry_run validates everything but does not reserve or call any social platform.
+        """
+        return await result_of(_editorial().publish(news_id, news_revision, image_revision, channel, actor, dry_run))
 
     @mcp.tool()
     async def queue_list(estado: str | None = None) -> dict:
@@ -763,7 +888,8 @@ if _ENABLED["QUEUE"]:
         canales: dict,
     ) -> dict:
         """
-        Marks a queue item as published: sets estado=publicada,
+        DEPRECATED and blocked: use editorial_publish or human reconciliation instead.
+        Historical documentation (no longer an authorized write path): sets estado=publicada,
         url_wordpress, fecha_publicada, and REPLACES the whole per-channel
         results map with `canales` (pass a result for every channel this
         publish run attempted — e.g.
@@ -934,5 +1060,13 @@ if __name__ == "__main__":
                 _env["GCS_TEMP_BUCKET"], public_base_url=_env.get("PUBLIC_BASE_URL", "")
             )
             app = TempImageProxyMiddleware(app, _temp_image_client)
+        if _ENABLED["QUEUE"]:
+            from clients.gcs_queue_client import GCSQueueClient
+            from core.editorial_http import EditorialHTTP
+            from tools.editorial_tools import EditorialService
+
+            _env = env_values(_ENV_PATH)
+            app = EditorialHTTP(app, EditorialService(GCSQueueClient(_env["QUEUE_GCS_BUCKET"]),
+                                                       base_url=_env.get("PUBLIC_BASE_URL", "")))
         port = int(os.getenv("PORT", "8000"))
         uvicorn.run(app, host="0.0.0.0", port=port)

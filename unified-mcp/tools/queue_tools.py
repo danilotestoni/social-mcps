@@ -100,6 +100,11 @@ async def queue_mark_published(
     fecha_publicada: str,
     canales: dict,
 ) -> dict:
+    """Legacy entry point retained for discovery; writes are blocked by the queue client.
+
+    Editorial results must come from editorial_publish or the human reconciliation form.
+    Never replace the complete historical channel map supplied by older clients.
+    """
     try:
         item = await client.update_item(
             id,

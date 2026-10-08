@@ -115,7 +115,7 @@ class GCSQueueClient:
             if not blob.name.endswith(".md"):
                 continue
             try:
-                frontmatter, _ = _parse_item_blob(blob.download_as_text())
+                frontmatter, _ = _parse_item_blob(blob.download_as_text(if_generation_match=blob.generation))
             except GCSQueueError as exc:
                 self._logger.warning("Saltando fichero de cola malformado %s: %s", blob.name, exc)
                 continue
@@ -143,13 +143,19 @@ class GCSQueueClient:
     # ── get ──────────────────────────────────────────────────────────────
 
     def _get_item_sync(self, item_id: str) -> dict:
+        self._validate_id(item_id)
         blob = self._bucket().blob(self._blob_name(item_id))
         try:
             blob.reload()
         except NotFound as exc:
             raise QueueNotFoundError(f"No existe la noticia '{item_id}' en la cola.") from exc
 
-        frontmatter, body = _parse_item_blob(blob.download_as_text())
+        try:
+            frontmatter, body = _parse_item_blob(blob.download_as_text(if_generation_match=blob.generation))
+        except PreconditionFailed as exc:
+            raise QueueConflictError("Lectura concurrente; vuelve a leer la noticia.") from exc
+        if frontmatter.get("id") != item_id:
+            raise GCSQueueError("El ID almacenado no corresponde al objeto solicitado.")
         frontmatter["version"] = blob.generation
         frontmatter["contenido_markdown"] = body
         return frontmatter
@@ -197,7 +203,6 @@ class GCSQueueClient:
         except PreconditionFailed as exc:
             raise QueueAlreadyExistsError(f"Ya existe una noticia con id '{item_id}'.") from exc
 
-        blob.reload()
         frontmatter["version"] = blob.generation
         frontmatter["contenido_markdown"] = contenido_markdown
         return frontmatter
@@ -225,6 +230,9 @@ class GCSQueueClient:
         fields: dict,
         contenido_markdown: str | None,
     ) -> dict:
+        from core.editorial import unlocked
+
+        self._validate_id(item_id)
         blob = self._bucket().blob(self._blob_name(item_id))
         try:
             blob.reload()
@@ -238,7 +246,19 @@ class GCSQueueClient:
                 "mientras tanto — vuelve a leerla con queue_get antes de reintentar."
             )
 
-        frontmatter, body = _parse_item_blob(blob.download_as_text())
+        frontmatter, body = _parse_item_blob(blob.download_as_text(if_generation_match=expected_version))
+        if frontmatter.get("id") != item_id:
+            raise GCSQueueError("ID almacenado incorrecto.")
+        unlocked(frontmatter)
+        if frontmatter.get("estado") in ("publicada", "descartada") and fields.get("estado") not in (None, frontmatter["estado"]):
+            raise GCSQueueError("No se permite reabrir una noticia publicada o descartada.")
+        if fields.get("estado") == "publicada" or fields.get("canales") is not None:
+            raise GCSQueueError("Registrar publicaciones exige el flujo editorial o reconciliación humana.")
+        changed = contenido_markdown is not None and contenido_markdown.strip() != body.strip()
+        if changed:
+            frontmatter["news_revision"] = frontmatter.get("news_revision", 1) + 1
+        if (changed or fields.get("imagen") is not None) and frontmatter.get("editorial"):
+            frontmatter["editorial"]["approval"] = None
 
         if "estado" in fields and fields["estado"] is not None:
             self._validate_estado(fields["estado"])
@@ -268,7 +288,6 @@ class GCSQueueClient:
                 "entre tu lectura y esta escritura. Vuelve a leerla con queue_get y reintenta."
             ) from exc
 
-        blob.reload()
         frontmatter["version"] = blob.generation
         frontmatter["contenido_markdown"] = body
         return frontmatter
@@ -316,6 +335,63 @@ class GCSQueueClient:
             self._update_item_sync, item_id, expected_version, updated_by, fields, contenido_markdown
         )
 
+    def _transition_sync(self, item_id: str, expected_version: int, operation) -> dict:
+        """Read a consistent generation, transform it and atomically replace it."""
+        item = self._get_item_sync(item_id)
+        if item["version"] != expected_version:
+            raise QueueConflictError("Versión obsoleta; vuelve a consultar queue_get.")
+        operation(item)
+        body = item.pop("contenido_markdown")
+        item.pop("version")
+        blob = self._bucket().blob(self._blob_name(item_id))
+        try:
+            blob.upload_from_string(_render_item_blob(item, body),
+                                    content_type="text/markdown; charset=utf-8",
+                                    if_generation_match=expected_version)
+        except PreconditionFailed as exc:
+            raise QueueConflictError("Otra ejecución ganó la reserva/escritura.") from exc
+        return dict(item, contenido_markdown=body, version=blob.generation)
+
+    async def transition(self, item_id: str, expected_version: int, operation) -> dict:
+        return await asyncio.to_thread(self._transition_sync, item_id, expected_version, operation)
+
+    def _store_asset_sync(self, item_id: str, data: bytes, mime: str, source_url: str) -> dict:
+        import hashlib
+        import json
+
+        self._validate_id(item_id)
+        sha = hashlib.sha256(data).hexdigest()
+        # Global immutable claim prevents reusing identical bytes for another news ID.
+        claim = self._bucket().blob(f"editorial-claims/{sha}.json")
+        try:
+            claim.upload_from_string(json.dumps({"news_id": item_id}),
+                                     content_type="application/json", if_generation_match=0)
+        except PreconditionFailed:
+            if json.loads(claim.download_as_text()).get("news_id") != item_id:
+                raise GCSQueueError("Imagen ya vinculada a otra noticia; reutilización bloqueada.")
+        name = f"editorial-assets/{item_id}/{sha}"
+        blob = self._bucket().blob(name)
+        try:
+            blob.upload_from_string(data, content_type=mime, if_generation_match=0)
+        except PreconditionFailed:
+            blob.reload()
+        return {"sha256": sha, "object_name": name, "generation": blob.generation,
+                "mime_type": mime, "size_bytes": len(data), "source_url": source_url}
+
+    async def store_asset(self, item_id, data, mime, source_url):
+        return await asyncio.to_thread(self._store_asset_sync, item_id, data, mime, source_url)
+
+    async def read_asset(self, asset):
+        import hashlib
+
+        def read():
+            blob = self._bucket().blob(asset["object_name"], generation=int(asset["generation"]))
+            data = blob.download_as_bytes(if_generation_match=int(asset["generation"]))
+            if hashlib.sha256(data).hexdigest() != asset["sha256"]:
+                raise GCSQueueError("Hash real de imagen incorrecto.")
+            return data
+        return await asyncio.to_thread(read)
+
     # ── archive ──────────────────────────────────────────────────────────
 
     def _archive_week_sync(self, week_start: str, updated_by: str) -> dict:
@@ -326,8 +402,15 @@ class GCSQueueClient:
                 continue
             item_id = blob.name.rsplit("/", 1)[-1][:-len(".md")]
             dest_name = f"{_ARCHIVE_PREFIX}/{week_start}/{item_id}.md"
-            bucket.copy_blob(blob, bucket, dest_name)
-            blob.delete()
+            from core.editorial import unlocked
+            item = self._get_item_sync(item_id)
+            unlocked(item)
+            if item.get("editorial") and item.get("estado") not in ("publicada", "descartada"):
+                raise GCSQueueError("No archivar noticias editoriales pendientes.")
+            generation = item["version"]
+            bucket.copy_blob(blob, bucket, dest_name, if_source_generation_match=generation,
+                             if_generation_match=0)
+            blob.delete(if_generation_match=generation)
             archived.append(item_id)
 
         self._logger.info(

@@ -21,8 +21,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install pytest ruff
 
       - name: Run tests
         working-directory: unified-mcp
         run: python -m pytest tests/ -v
+
+      - name: Check editorial protocol static errors
+        working-directory: unified-mcp
+        run: >-
+          ruff check --isolated --select E9,F
+          core/editorial.py core/editorial_http.py tools/editorial_tools.py
+          clients/gcs_queue_client.py server.py tests/test_editorial.py
+          tests/test_editorial_integration.py tests/test_editorial_server.py

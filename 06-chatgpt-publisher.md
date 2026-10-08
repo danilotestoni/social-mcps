@@ -1,5 +1,22 @@
 # 📤 Agente 6B: ChatGPT Publisher
 
+## Flujo obligatorio para noticias de la cola (vigente)
+
+
+## Protocolo obligatorio de vinculación noticia–imagen
+
+NINGÚN AGENTE PUEDE GENERAR, APROBAR O PUBLICAR UNA IMAGEN EDITORIAL SIN UNA VINCULACIÓN INEQUÍVOCA CON LA NOTICIA CORRESPONDIENTE.
+
+La cola compartida es la fuente de verdad; la memoria conversacional no puede sustituirla. Ningún agente publicará noticias sin autorización explícita del usuario. Seguir [el runbook editorial](docs/editorial-runbook.md). Usar `editorial_resolve` antes de elegir noticia, conservar `news_id` y revisiones en cada entrega y detenerse ante ambigüedad. Solo el usuario completa la revisión visual y autorización; nunca un agente.
+
+Para una noticia de la cola, seguir `editorial_resolve` → `editorial_prepare` → generación nativa desde `visual_prompt` → `editorial_bind_image` con la URL compartida y el `generation_id` pendiente → `editorial_request_review` → aprobación humana en el navegador → `editorial_publish` por canal. No utilizar los pasos genéricos descritos más abajo para noticias de cola.
+
+La URL ChatGPT se conserva como origen del activo inmutable. No usar `upload_temp_image`, `wordpress_publish_post` ni otras herramientas genéricas como ruta editorial. WordPress primero; solo el servidor sustituye `[WORDPRESS_URL]` por su URL confirmada. Threads y X siguen siendo solo texto, pero también requieren aprobación editorial. Si la imagen no puede verificarse, se bloquean todos los canales editoriales.
+
+Las secciones siguientes conservan el procedimiento técnico histórico exclusivamente para publicaciones ajenas a la cola, declaradas con `non_editorial=true`. Para cualquier conflicto en noticias de cola prevalece el runbook anterior. Nunca rellenar el formulario humano en nombre del usuario.
+
+---
+
 ## Objetivo
 
 Flujo especializado de publicación para ejecuciones realizadas desde ChatGPT o un modelo/agente de OpenAI que disponga de generación nativa de imágenes y enlaces compartidos de ChatGPT.

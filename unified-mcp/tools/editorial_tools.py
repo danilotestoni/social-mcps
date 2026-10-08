@@ -166,8 +166,9 @@ class EditorialService:
             from tools.x_tools import post_to_x
             return await post_to_x(self.context[channel], payload["text"])
         if channel == "threads":
-            from tools.threads_tools import publish_post
-            return await publish_post(self.context[channel], payload["text"])
+            published = await self.context[channel].publish_thread_details(
+                payload["text"], allow_ambiguous_recovery=False)
+            return {"success": True, "data": {"thread_id": published.thread_id, "permalink": published.permalink}}
         import importlib
         module = importlib.import_module("tools." + channel + "_tools")
         return await module.publish_post(self.context[channel], payload["text"], image_url)

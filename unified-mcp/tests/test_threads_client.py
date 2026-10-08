@@ -30,6 +30,21 @@ def _install_mock_transport(handler):
 
 
 class ThreadsClientPublishTests(TestCase):
+    def test_editorial_mode_never_retries_ambiguous_400(self) -> None:
+        calls = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append((request.method, request.url.path))
+            if request.url.path.endswith("/threads"):
+                return httpx.Response(200, json={"id": "container-123"})
+            if request.method == "GET":
+                return httpx.Response(200, json={"status": "FINISHED"})
+            return httpx.Response(400, json={"error": {"message": "ambiguous"}})
+        with _install_mock_transport(handler):
+            client = ThreadsClient(_FakeTokenManager(), "user-1")
+            with self.assertRaises(httpx.HTTPStatusError):
+                asyncio.run(client.publish_thread_details("NVIDIA", allow_ambiguous_recovery=False))
+        self.assertEqual(sum(path.endswith("/threads_publish") for _, path in calls), 1)
+
     def test_text_post_waits_for_finished_container_before_publish(self) -> None:
         calls = {"poll": 0}
 

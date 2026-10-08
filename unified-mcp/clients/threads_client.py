@@ -164,7 +164,7 @@ class ThreadsClient:
         return None
 
     async def publish_thread_details(
-        self, text: str, image_url: str | None = None
+        self, text: str, image_url: str | None = None, *, allow_ambiguous_recovery: bool = True
     ) -> PublishedThread:
         container_id = await self._create_container(text, image_url)
         self._logger.debug("Threads container created: %s", container_id)
@@ -173,6 +173,10 @@ class ThreadsClient:
         try:
             thread_id = await self._publish_container(container_id)
         except httpx.HTTPStatusError as exc:
+            if not allow_ambiguous_recovery:
+                # Editorial reservations must remain uncertain; no resend or text-only
+                # matching to an older post may establish this attempt's outcome.
+                raise
             if exc.response.status_code != 400:
                 raise
             self._logger.warning(

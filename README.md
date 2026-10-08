@@ -240,3 +240,7 @@ El servidor arranca con transport `streamable-http` (variable `MCP_TRANSPORT`) p
 - **Respuestas estructuradas:** todas las herramientas devuelven `{"success": true/false, "data": ..., "error": ...}`.
 - **Degradación controlada:** cuando una acción no puede ejecutarse en la nube (Playwright), el servidor devuelve un error claro con el payload y la acción a ejecutar manualmente.
 - **Dry-run:** todas las herramientas aceptan `dry_run=true` para validar el payload sin publicar nada.
+
+## Integridad editorial: noticias e imágenes
+
+El flujo de la cola utiliza `editorial_resolve`, `editorial_prepare`, `editorial_bind_image`, `editorial_request_review` y `editorial_publish`. Consulta [el runbook](docs/editorial-runbook.md) para revisión visual humana, aprobación, reservas, reconciliación y rollback. Las herramientas genéricas requieren `non_editorial=true` para publicaciones ajenas cuando hay cola configurada. Los históricos no reciben aprobaciones automáticas.

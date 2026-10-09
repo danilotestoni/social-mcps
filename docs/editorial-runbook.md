@@ -27,10 +27,13 @@ Ningún agente publica noticias sin autorización explícita del usuario.
    news_id, generation_id, upload_to_wordpress=false)` genera y vincula en servidor.
    No se debe llamar a `upload_temp_image` como sustituto de la vinculación.
 5. `editorial_request_review(news_id)` devuelve un enlace de 30 minutos. El
-   **usuario** abre el enlace, observa imagen/noticia/textos, describe lo que ve,
-   confirma correspondencia semántica y autoriza canales. Si no ve la imagen,
-   reconoce otra marca/noticia o no está seguro, no aprueba. Los agentes no envían
-   ese formulario. La aprobación no se crea desde parámetros MCP ni metadatos.
+   **usuario** abre el enlace e inspecciona imagen/noticia/textos. Todos los canales
+   preparados aparecen seleccionados por defecto. Confirma correspondencia
+   semántica y autoriza expresamente la publicación. Nombre y comentario son
+   opcionales. Si no ve la imagen, reconoce otra marca/noticia o no está seguro,
+   no aprueba. Los agentes no envían ese formulario. La aprobación no se crea desde
+   parámetros MCP ni metadatos. Tras guardar, vuelve al chat y escribe «publica»;
+   el formulario no invoca plataformas sociales.
 6. `queue_get` para consultar revisiones y aprobación persistente.
    `editorial_publish(news_id, news_revision, image_revision, channel, actor,
    dry_run=true)` comprueba sin publicar ni reservar.

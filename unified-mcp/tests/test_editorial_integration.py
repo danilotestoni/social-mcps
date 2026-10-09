@@ -209,14 +209,25 @@ def test_human_page_requires_visual_and_publication_confirmation(queue, monkeypa
         link = (await service.review_link("nvidia"))["review_url"]
         app = EditorialHTTP(None, service)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="https://test.example") as client:
-            assert (await client.get(link)).status_code == 200
+            page = await client.get(link)
+            assert page.status_code == 200
+            for channel in ("facebook", "threads"):
+                assert f'name="channel" value="{channel}" checked'.encode() in page.content
+            assert b'name="actor" placeholder="Tu nombre (opcional)"' in page.content
+            assert b'<textarea name="observation"' in page.content
+            assert b'name="actor" placeholder="Tu nombre" required' not in page.content
+            assert b'name="observation" required' not in page.content
             incomplete = await client.post(link, data={"version": item["version"], "actor": "Dani"})
             assert incomplete.status_code == 409
             assert (await service.queue.get_item("nvidia"))["editorial"]["approval"] is None
-            accepted = await client.post(link, data={"version": item["version"], "actor": "Dani",
-                "observation": "Veo el ordenador NVIDIA correspondiente a la noticia", "semantic_match": "yes",
-                "authorized": "yes", "channel": "facebook"})
+            accepted = await client.post(link, data={"version": item["version"], "semantic_match": "yes",
+                "authorized": "yes", "channel": ["facebook", "threads"]})
             assert accepted.status_code == 200
+            approved = (await service.queue.get_item("nvidia"))["editorial"]["approval"]
+            assert approved["channels"] == ["facebook", "threads"]
+            assert approved["actor"] == "Aprobación desde revisión web"
+            assert approved["visual_observation"] == ""
+            assert "vuelve al chat".encode() in accepted.content.lower()
             assert (await client.post(link, data={"version": item["version"]})).status_code == 409
             assert (await client.get(service.asset_url(item))).content.startswith(b"\x89PNG")
     asyncio.run(scenario())

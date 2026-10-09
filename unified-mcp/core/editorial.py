@@ -100,7 +100,8 @@ def approve(item, review_id, actor, observation, semantic_match, authorized, cha
     check(e["content_hash"] == content_hash(item) and e["payload_hash"] == digest(e["payloads"]),
           "Contenido cambiado desde la preparación.")
     check(semantic_match is True and authorized is True, "Falta correspondencia visual o autorización expresa.")
-    check(len(observation.strip()) >= 15, "Describe lo que ves y por qué corresponde a esta noticia.")
+    actor = actor.strip() or "Aprobación desde revisión web"
+    observation = observation.strip()
     check(channels and len(channels) == len(set(channels)) and set(channels) <= set(e["payloads"]),
           "Selecciona canales preparados.")
     e["approval"] = {"snapshot": snapshot(e), "channels": channels, "actor": actor,

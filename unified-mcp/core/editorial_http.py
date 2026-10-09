@@ -77,10 +77,15 @@ class EditorialHTTP:
                     operation = lambda current: flow.approve(current, identity, value("actor"), value("observation"),
                         value("semantic_match") == "yes", value("authorized") == "yes", form.get("channel", []))
                 await self.service.queue.transition(news_id, item["version"], operation)
-                return await self.respond(send, 200, b"Decision guardada. Este formulario no publica contenido.")
+                return await self.respond(
+                    send,
+                    200,
+                    "Aprobación guardada. Vuelve al chat y escribe «publica» para iniciar "
+                    "los canales autorizados.".encode(),
+                )
             await self.service.queue.read_asset(e["image"])
             esc = html.escape
-            channels = "".join(f'<label><input type="checkbox" name="channel" value="{esc(c)}">{esc(c)}</label> '
+            channels = "".join(f'<label><input type="checkbox" name="channel" value="{esc(c)}" checked>{esc(c)}</label> '
                                for c in e["payloads"])
             pending = [c for c, a in e["attempts"].items() if a["state"] in ("reserved", "uncertain")]
             reconcile_form = ""
@@ -109,7 +114,7 @@ textarea{{display:block;width:90%}}label{{display:block}}button{{cursor:pointer}
 <p>Origen: {esc(e['image']['source_url'])}</p><h2>Contenido exacto por canal</h2>
 <pre>{esc(json.dumps(e['payloads'], ensure_ascii=False, indent=2))}</pre>
 <form method="post"><input type="hidden" name="version" value="{item['version']}">
-<input name="actor" placeholder="Tu nombre" required><textarea name="observation" minlength="15" required
+<input name="actor" placeholder="Tu nombre (opcional)"><textarea name="observation"
 placeholder="Describe lo que ves y cómo corresponde a esta noticia"></textarea>
 <label><input type="checkbox" name="semantic_match" value="yes" required>He visto la imagen y corresponde a esta noticia.
 Si no se muestra o representa otra noticia, no aprobar.</label>{channels}

@@ -150,7 +150,10 @@ class SecretVersionRotationTests(TestCase):
         for manager_type, module_name, access_key, expiry_key in cases:
             with self.subTest(platform=access_key.split("_", 1)[0]):
                 manager = manager_type(Path("unused.env"))
-                with patch(f"{module_name}.persist_values") as persist_values:
+                with (
+                    patch(f"{module_name}.persist_values") as persist_values,
+                    patch(f"{module_name}.secret_rotation_lock"),
+                ):
                     manager.persist(token_data)
 
                 persist_values.assert_called_once_with(

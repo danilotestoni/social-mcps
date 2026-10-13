@@ -206,7 +206,6 @@ class LinkedInRefreshRecoveryTests(IsolatedAsyncioTestCase):
             patch.object(manager, "persist", side_effect=config.SecretPersistenceError("transient failure")),
         ):
             self.assertEqual(await manager.get_valid_token(), "new-access")
-
-        self.assertEqual(os.environ["LINKEDIN_ACCESS_TOKEN"], "new-access")
-        self.assertEqual(os.environ["LINKEDIN_REFRESH_TOKEN"], "new-refresh")
-        self.assertEqual(os.environ["LINKEDIN_TOKEN_EXPIRY"], "9999999999")
+            self.assertEqual(os.environ["LINKEDIN_ACCESS_TOKEN"], "new-access")
+            self.assertEqual(os.environ["LINKEDIN_REFRESH_TOKEN"], "new-refresh")
+            self.assertEqual(os.environ["LINKEDIN_TOKEN_EXPIRY"], "9999999999")

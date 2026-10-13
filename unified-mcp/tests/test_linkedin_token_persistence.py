@@ -133,3 +133,26 @@ class SecretVersionRotationTests(TestCase):
             config.persist_values(Path("unused.env"), {"LINKEDIN_REFRESH_TOKEN": "new"})
 
         client.add_secret_version.assert_not_called()
+
+    def test_social_token_pairs_are_persisted_atomically(self) -> None:
+        from auth.facebook_auth import FacebookTokenManager
+        from auth.instagram_auth import InstagramTokenManager
+        from auth.threads_auth import ThreadsTokenManager
+
+        cases = [
+            (FacebookTokenManager, "auth.facebook_auth", "FACEBOOK_ACCESS_TOKEN", "FACEBOOK_TOKEN_EXPIRY"),
+            (InstagramTokenManager, "auth.instagram_auth", "INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_TOKEN_EXPIRY"),
+            (ThreadsTokenManager, "auth.threads_auth", "THREADS_ACCESS_TOKEN", "THREADS_TOKEN_EXPIRY"),
+        ]
+        token_data = SimpleNamespace(access_token="new-access", token_expiry=1234567890)
+
+        for manager_type, module_name, access_key, expiry_key in cases:
+            with self.subTest(platform=access_key.split("_", 1)[0]):
+                manager = manager_type(Path("unused.env"))
+                with patch(f"{module_name}.persist_values") as persist_values:
+                    manager.persist(token_data)
+
+                persist_values.assert_called_once_with(
+                    Path("unused.env"),
+                    {access_key: "new-access", expiry_key: "1234567890"},
+                )

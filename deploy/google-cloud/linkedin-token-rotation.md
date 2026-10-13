@@ -9,10 +9,10 @@ versions as active for pricing.
 ## Configure the existing secret
 
 Set these non-secret Cloud Run environment variables to the exact existing
-resource values:
+resource values. Secret IDs are case-sensitive; copy the exact ID shown in Secret Manager if it differs from the repository default:
 
 - `SOCIAL_MCPS_SECRET_NAME`: the consolidated secret ID
-  (`SOCIAL-MCPS-CREDENTIALS`, as reported in the current project).
+  (`social-mcps-credentials`, as reported in the current project).
 - `GOOGLE_CLOUD_PROJECT`: the project ID containing that secret
   (`socialmcps` in the repository's current deployment configuration).
 

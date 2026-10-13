@@ -88,13 +88,25 @@ def _assert_latest_version(client, parent: str, expected_version: str) -> None:
         )
 
 
+def _version_number(version_name: str) -> int:
+    try:
+        return int(version_name.rsplit("/", 1)[1])
+    except (IndexError, ValueError) as exc:
+        raise SecretPersistenceError(
+            f"Unexpected Secret Manager version resource name: {version_name}"
+        ) from exc
+
+
 def _destroy_obsolete_versions(client, parent: str, keep_version: str) -> None:
-    # Secret Manager charges for both ENABLED and DISABLED versions. Destroy
-    # old versions only after the replacement has been read back and checked.
+    # Never destroy the kept version or anything created after it. A manual
+    # rotation may add a newer version immediately after our latest check.
+    keep_number = _version_number(keep_version)
     for version in client.list_secret_versions(request={"parent": parent}):
-        if version.name == keep_version or version.state == 3:  # DESTROYED
+        if version.state == 3:  # DESTROYED
             continue
-        client.destroy_secret_version(request={"name": version.name})
+        version_number = _version_number(version.name)
+        if version_number < keep_number:
+            client.destroy_secret_version(request={"name": version.name})
 
 
 def persist_values(env_path: Path, updates: Mapping[str, str]) -> None:

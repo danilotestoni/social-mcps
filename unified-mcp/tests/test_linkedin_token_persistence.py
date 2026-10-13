@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -56,6 +56,8 @@ class SecretVersionRotationTests(TestCase):
                     SimpleNamespace(name=f"{self.parent}/versions/5", state=2),
                     SimpleNamespace(name=f"{self.parent}/versions/4", state=3),
                     SimpleNamespace(name=v7, state=1),
+                    # A concurrent/manual rotation after the latest check must survive.
+                    SimpleNamespace(name=f"{self.parent}/versions/8", state=1),
                 ]
             ),
             destroy_secret_version=Mock(),
@@ -70,6 +72,11 @@ class SecretVersionRotationTests(TestCase):
             request={"name": f"{self.parent}/versions/5"}
         )
         self.assertEqual(client.destroy_secret_version.call_count, 2)
+        destroyed_names = {
+            call.kwargs["request"]["name"]
+            for call in client.destroy_secret_version.call_args_list
+        }
+        self.assertNotIn(f"{self.parent}/versions/8", destroyed_names)
         self.assertEqual(
             json.loads(os.environ[config.CONSOLIDATED_SECRETS_ENV_VAR]),
             {"OTHER_TOKEN": "keep", "LINKEDIN_REFRESH_TOKEN": "new"},

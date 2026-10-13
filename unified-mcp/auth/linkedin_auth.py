@@ -10,6 +10,7 @@ import httpx
 from core.config import SecretPersistenceError, env_values, persist_values, preflight_persistence
 from core.logger import get_logger
 from core.models import LinkedInTokenData
+from core.secret_rotation_lock import secret_rotation_lock
 
 _TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
 _WARNING_WINDOW = 7 * 24 * 3600  # 7 days in seconds
@@ -111,30 +112,31 @@ class LinkedInTokenManager:
                         "LinkedIn access token has expired and no refresh token is available. "
                         "Run oauth_setup.py to obtain a new access token."
                     )
-                # LinkedIn can rotate/revoke the refresh token as part of this
-                # request. Validate durable storage before making that request.
-                preflight_persistence()
-                token_data = await self.refresh(
-                    env["LINKEDIN_CLIENT_ID"],
-                    env["LINKEDIN_CLIENT_SECRET"],
-                    refresh_token,
-                )
-                try:
-                    self.persist(token_data)
-                except SecretPersistenceError:
-                    # Keep the rotated credentials usable for the lifetime of
-                    # this process and let the current request proceed. The
-                    # error log makes the failed durable write operationally visible.
-                    os.environ.update(
-                        {
-                            "LINKEDIN_ACCESS_TOKEN": token_data.access_token,
-                            "LINKEDIN_REFRESH_TOKEN": token_data.refresh_token,
-                            "LINKEDIN_TOKEN_EXPIRY": str(token_data.token_expiry),
-                        }
+                with secret_rotation_lock():
+                    # LinkedIn can rotate/revoke the refresh token as part of this
+                    # request. Validate durable storage before making that request.
+                    preflight_persistence()
+                    token_data = await self.refresh(
+                        env["LINKEDIN_CLIENT_ID"],
+                        env["LINKEDIN_CLIENT_SECRET"],
+                        refresh_token,
                     )
-                    self._logger.exception(
-                        "LinkedIn returned rotated credentials but persistence failed; "
-                        "retaining them in process memory."
-                    )
-                return token_data.access_token
+                    try:
+                        self.persist(token_data)
+                    except SecretPersistenceError:
+                        # Keep the rotated credentials usable for the lifetime of
+                        # this process and let the current request proceed. The
+                        # error log makes the failed durable write operationally visible.
+                        os.environ.update(
+                            {
+                                "LINKEDIN_ACCESS_TOKEN": token_data.access_token,
+                                "LINKEDIN_REFRESH_TOKEN": token_data.refresh_token,
+                                "LINKEDIN_TOKEN_EXPIRY": str(token_data.token_expiry),
+                            }
+                        )
+                        self._logger.exception(
+                            "LinkedIn returned rotated credentials but persistence failed; "
+                            "retaining them in process memory."
+                        )
+                    return token_data.access_token
             return env["LINKEDIN_ACCESS_TOKEN"]

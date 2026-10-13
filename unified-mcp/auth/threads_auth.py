@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 
 from core.config import env_values, persist_values
+from core.secret_rotation_lock import secret_rotation_lock
 from core.logger import get_logger
 from core.models import ThreadsTokenData
 
@@ -78,13 +79,14 @@ class ThreadsTokenManager:
         return token_data
 
     def persist(self, token_data: ThreadsTokenData) -> None:
-        persist_values(
-            self._env_path,
-            {
-                "THREADS_ACCESS_TOKEN": token_data.access_token,
-                "THREADS_TOKEN_EXPIRY": str(token_data.token_expiry),
-            },
-        )
+        with secret_rotation_lock():
+            persist_values(
+                self._env_path,
+                {
+                    "THREADS_ACCESS_TOKEN": token_data.access_token,
+                    "THREADS_TOKEN_EXPIRY": str(token_data.token_expiry),
+                },
+            )
         self._logger.debug("Updated Threads token persisted.")
 
     async def get_valid_token(self) -> str:

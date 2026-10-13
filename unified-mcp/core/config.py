@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Mapping
 
 from dotenv import dotenv_values, set_key
 
@@ -46,46 +47,63 @@ def env_values(env_path: Path) -> dict[str, str]:
     return values
 
 
-def _persist_consolidated_secret(key: str, value: str) -> bool:
-    raw = os.environ.get(CONSOLIDATED_SECRETS_ENV_VAR)
+def _project_id() -> str | None:
+    return next((os.environ.get(k) for k in GCP_PROJECT_ENV_VARS if os.environ.get(k)), None)
+
+
+def _secret_client():
+    from google.cloud import secretmanager
+
+    return secretmanager.SecretManagerServiceClient()
+
+
+def _read_latest_secret(client, project_id: str, secret_name: str) -> str:
+    version_name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(request={"name": version_name})
+    return response.payload.data.decode("utf-8")
+
+
+def persist_values(env_path: Path, updates: Mapping[str, str]) -> None:
+    """Persist a set of values atomically as one version of the consolidated secret.
+
+    Cloud Run reads the latest secret JSON immediately before writing so fields
+    changed by other instances are preserved. Local development continues to
+    update the process environment and .env file.
+    """
+    if not updates:
+        return
+
+    os.environ.update(updates)
     secret_name = os.environ.get(CONSOLIDATED_SECRET_NAME_ENV_VAR)
-    project_id = next((os.environ.get(k) for k in GCP_PROJECT_ENV_VARS if os.environ.get(k)), None)
-    if not raw or not secret_name or not project_id:
-        return False
+    project_id = _project_id()
+    if not secret_name or not project_id or not os.environ.get(CONSOLIDATED_SECRETS_ENV_VAR):
+        _persist_env_file(env_path, updates)
+        return
 
     try:
-        from google.cloud import secretmanager
-
-        secrets = json.loads(raw)
-        secrets[key] = value
+        client = _secret_client()
+        secrets = json.loads(_read_latest_secret(client, project_id, secret_name))
+        secrets.update(updates)
         payload = json.dumps(secrets, separators=(",", ":"), ensure_ascii=False)
-        client = secretmanager.SecretManagerServiceClient()
         parent = f"projects/{project_id}/secrets/{secret_name}"
         client.add_secret_version(
             request={"parent": parent, "payload": {"data": payload.encode("utf-8")}}
         )
         os.environ[CONSOLIDATED_SECRETS_ENV_VAR] = payload
-        _logger.info("Persisted %s in consolidated Secret Manager secret.", key)
-        return True
+        _logger.info("Persisted %d credential value(s) in consolidated Secret Manager secret.", len(updates))
     except Exception as exc:
-        _logger.error("Could not persist %s in consolidated Secret Manager secret: %s", key, exc)
-        return False
+        _logger.error("Could not persist credential set in consolidated Secret Manager secret: %s", exc)
+        _persist_env_file(env_path, updates)
 
 
 def persist_value(env_path: Path, key: str, value: str) -> None:
-    """
-    Persist a refreshed credential.
+    """Backward-compatible wrapper for persisting a single credential."""
+    persist_values(env_path, {key: value})
 
-    Cloud Run keeps all credentials in one consolidated Secret Manager secret.
-    When its name and project are configured, add a new version of that same
-    secret with only the requested key changed. Local development continues to
-    use .env.
-    """
-    os.environ[key] = value
-    if _persist_consolidated_secret(key, value):
-        return
 
-    try:
-        set_key(str(env_path), key, value)
-    except OSError as exc:
-        _logger.warning("Could not write %s to %s: %s", key, env_path, exc)
+def _persist_env_file(env_path: Path, updates: Mapping[str, str]) -> None:
+    for key, value in updates.items():
+        try:
+            set_key(str(env_path), key, value)
+        except OSError as exc:
+            _logger.warning("Could not write %s to %s: %s", key, env_path, exc)

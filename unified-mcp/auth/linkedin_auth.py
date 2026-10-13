@@ -113,20 +113,46 @@ class LinkedInTokenManager:
                         "Run oauth_setup.py to obtain a new access token."
                     )
                 with secret_rotation_lock():
-                    # LinkedIn can rotate/revoke the refresh token as part of this
-                    # request. Validate durable storage before making that request.
-                    preflight_persistence()
+                    # A manual rotation may have updated Secret Manager without
+                # restarting this instance. Reload it while holding the shared lock.
+                with secret_rotation_lock():
+                    latest_secrets = preflight_persistence()
+                    refresh_env = env
+                    if latest_secrets is not None:
+                        linked_in_keys = (
+                            "LINKEDIN_ACCESS_TOKEN",
+                            "LINKEDIN_REFRESH_TOKEN",
+                            "LINKEDIN_TOKEN_EXPIRY",
+                            "LINKEDIN_CLIENT_ID",
+                            "LINKEDIN_CLIENT_SECRET",
+                        )
+                        latest_linkedin = {
+                            key: latest_secrets[key]
+                            for key in linked_in_keys
+                            if key in latest_secrets
+                        }
+                        refresh_env = env | latest_linkedin
+                        os.environ.update(latest_linkedin)
+
+                    latest_expiry = int(refresh_env["LINKEDIN_TOKEN_EXPIRY"])
+                    if not self.is_expired(latest_expiry):
+                        return refresh_env["LINKEDIN_ACCESS_TOKEN"]
+
+                    refresh_token = refresh_env.get("LINKEDIN_REFRESH_TOKEN", "")
+                    if not refresh_token:
+                        raise AuthError(
+                            "LinkedIn access token has expired and no refresh token is available. "
+                            "Run oauth_setup.py to obtain a new access token."
+                        )
+
                     token_data = await self.refresh(
-                        env["LINKEDIN_CLIENT_ID"],
-                        env["LINKEDIN_CLIENT_SECRET"],
+                        refresh_env["LINKEDIN_CLIENT_ID"],
+                        refresh_env["LINKEDIN_CLIENT_SECRET"],
                         refresh_token,
                     )
                     try:
                         self.persist(token_data)
                     except SecretPersistenceError:
-                        # Keep the rotated credentials usable for the lifetime of
-                        # this process and let the current request proceed. The
-                        # error log makes the failed durable write operationally visible.
                         os.environ.update(
                             {
                                 "LINKEDIN_ACCESS_TOKEN": token_data.access_token,

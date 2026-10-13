@@ -224,3 +224,41 @@ class SecretRotationLockTests(TestCase):
                 self.assertIsNone(os.environ.get(config.CONSOLIDATED_SECRETS_ENV_VAR))
 
         acquire.assert_not_called()
+
+
+class LinkedInLatestSecretTests(IsolatedAsyncioTestCase):
+    async def test_refresh_uses_latest_secret_after_manual_rotation(self) -> None:
+        from auth.linkedin_auth import LinkedInTokenManager
+        from core.models import LinkedInTokenData
+
+        manager = LinkedInTokenManager(Path("unused.env"))
+        stale_env = {
+            "LINKEDIN_CLIENT_ID": "stale-client",
+            "LINKEDIN_CLIENT_SECRET": "stale-secret",
+            "LINKEDIN_ACCESS_TOKEN": "stale-access",
+            "LINKEDIN_REFRESH_TOKEN": "stale-refresh",
+            "LINKEDIN_TOKEN_EXPIRY": "1",
+            "LINKEDIN_PERSON_URN": "urn:li:person:test",
+        }
+        latest = {
+            "LINKEDIN_CLIENT_ID": "latest-client",
+            "LINKEDIN_CLIENT_SECRET": "latest-secret",
+            "LINKEDIN_ACCESS_TOKEN": "latest-access",
+            "LINKEDIN_REFRESH_TOKEN": "latest-refresh",
+            "LINKEDIN_TOKEN_EXPIRY": "1",
+        }
+        token_data = LinkedInTokenData(
+            access_token="new-access", refresh_token="rotated-refresh",
+            expires_in=3600, token_expiry=9999999999,
+        )
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("auth.linkedin_auth.env_values", return_value=stale_env),
+            patch("auth.linkedin_auth.preflight_persistence", return_value=latest),
+            patch.object(manager, "refresh", new=AsyncMock(return_value=token_data)) as refresh,
+            patch.object(manager, "persist") as persist,
+        ):
+            self.assertEqual(await manager.get_valid_token(), "new-access")
+
+        refresh.assert_awaited_once_with("latest-client", "latest-secret", "latest-refresh")
+        persist.assert_called_once_with(token_data)

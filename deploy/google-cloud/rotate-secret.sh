@@ -76,12 +76,16 @@ fi
 
 TMP_FILE="$(mktemp)"
 LOCK_TOKEN=""
-cleanup() {
-  rm -f "$TMP_FILE"
+release_lock() {
   if [ -n "$LOCK_TOKEN" ]; then
     python3 -m core.secret_rotation_lock release "$LOCK_TOKEN" --gcloud >/dev/null || \
       echo "ADVERTENCIA: no se pudo liberar el bloqueo; caducará automáticamente." >&2
+    LOCK_TOKEN=""
   fi
+}
+cleanup() {
+  rm -f "$TMP_FILE"
+  release_lock
 }
 trap cleanup EXIT
 
@@ -112,6 +116,9 @@ if [ -n "$PREVIOUS_VERSION" ]; then
     --project="$PROJECT" --quiet
   echo "OK: versión anterior ($PREVIOUS_VERSION) destruida."
 fi
+
+# No mantengas el bloqueo mientras se crea una revisión de Cloud Run.
+release_lock
 
 if [ "$RESTART" = true ]; then
   echo "Forzando redeploy de Cloud Run ('$SERVICE') para recoger el nuevo valor..."

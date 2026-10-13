@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import time
 from pathlib import Path
 
 import httpx
 
-from core.config import env_values, persist_value
+from core.config import SecretPersistenceError, env_values, persist_values, preflight_persistence
 from core.logger import get_logger
 from core.models import LinkedInTokenData
+from core.secret_rotation_lock import secret_rotation_lock
 
 _TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
 _WARNING_WINDOW = 7 * 24 * 3600  # 7 days in seconds
+_TOKEN_REFRESH_LOCK = asyncio.Lock()
 
 _REQUIRED_KEYS = (
     "LINKEDIN_CLIENT_ID",
@@ -84,27 +88,55 @@ class LinkedInTokenManager:
         return token_data
 
     def persist(self, token_data: LinkedInTokenData) -> None:
-        persist_value(self._env_path, "LINKEDIN_ACCESS_TOKEN", token_data.access_token)
-        persist_value(self._env_path, "LINKEDIN_REFRESH_TOKEN", token_data.refresh_token)
-        persist_value(self._env_path, "LINKEDIN_TOKEN_EXPIRY", str(token_data.token_expiry))
+        persist_values(
+            self._env_path,
+            {
+                "LINKEDIN_ACCESS_TOKEN": token_data.access_token,
+                "LINKEDIN_REFRESH_TOKEN": token_data.refresh_token,
+                "LINKEDIN_TOKEN_EXPIRY": str(token_data.token_expiry),
+            },
+        )
         self._logger.debug("Updated tokens persisted.")
 
     async def get_valid_token(self) -> str:
-        env = self.load()
-        expiry = int(env["LINKEDIN_TOKEN_EXPIRY"])
-        self.warn_if_expiring_soon(expiry)
-        if self.is_expired(expiry):
-            refresh_token = env.get("LINKEDIN_REFRESH_TOKEN", "")
-            if not refresh_token:
-                raise AuthError(
-                    "LinkedIn access token has expired and no refresh token is available. "
-                    "Run oauth_setup.py to obtain a new access token."
-                )
-            token_data = await self.refresh(
-                env["LINKEDIN_CLIENT_ID"],
-                env["LINKEDIN_CLIENT_SECRET"],
-                refresh_token,
-            )
-            self.persist(token_data)
-            return token_data.access_token
-        return env["LINKEDIN_ACCESS_TOKEN"]
+        # One Cloud Run instance is configured for one request at a time; this
+        # process-wide lock also protects multiple managers in that instance.
+        async with _TOKEN_REFRESH_LOCK:
+            env = self.load()
+            expiry = int(env["LINKEDIN_TOKEN_EXPIRY"])
+            self.warn_if_expiring_soon(expiry)
+            if self.is_expired(expiry):
+                refresh_token = env.get("LINKEDIN_REFRESH_TOKEN", "")
+                if not refresh_token:
+                    raise AuthError(
+                        "LinkedIn access token has expired and no refresh token is available. "
+                        "Run oauth_setup.py to obtain a new access token."
+                    )
+                with secret_rotation_lock():
+                    # LinkedIn can rotate/revoke the refresh token as part of this
+                    # request. Validate durable storage before making that request.
+                    preflight_persistence()
+                    token_data = await self.refresh(
+                        env["LINKEDIN_CLIENT_ID"],
+                        env["LINKEDIN_CLIENT_SECRET"],
+                        refresh_token,
+                    )
+                    try:
+                        self.persist(token_data)
+                    except SecretPersistenceError:
+                        # Keep the rotated credentials usable for the lifetime of
+                        # this process and let the current request proceed. The
+                        # error log makes the failed durable write operationally visible.
+                        os.environ.update(
+                            {
+                                "LINKEDIN_ACCESS_TOKEN": token_data.access_token,
+                                "LINKEDIN_REFRESH_TOKEN": token_data.refresh_token,
+                                "LINKEDIN_TOKEN_EXPIRY": str(token_data.token_expiry),
+                            }
+                        )
+                        self._logger.exception(
+                            "LinkedIn returned rotated credentials but persistence failed; "
+                            "retaining them in process memory."
+                        )
+                    return token_data.access_token
+            return env["LINKEDIN_ACCESS_TOKEN"]

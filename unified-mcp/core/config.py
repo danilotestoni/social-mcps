@@ -109,6 +109,37 @@ def _destroy_obsolete_versions(client, parent: str, keep_version: str) -> None:
             client.destroy_secret_version(request={"name": version.name})
 
 
+def preflight_persistence() -> None:
+    """Validate Cloud Run Secret Manager access before requesting token rotation."""
+    if not os.environ.get(CONSOLIDATED_SECRETS_ENV_VAR):
+        return
+
+    secret_name = os.environ.get(CONSOLIDATED_SECRET_NAME_ENV_VAR)
+    project_id = _project_id()
+    if not secret_name or not project_id:
+        raise SecretPersistenceError(
+            "Cloud Run has SOCIAL_MCPS_SECRETS_JSON but is missing "
+            "SOCIAL_MCPS_SECRET_NAME or GOOGLE_CLOUD_PROJECT/GCP_PROJECT; "
+            "refusing to rotate credentials that cannot be durably stored."
+        )
+
+    parent = f"projects/{project_id}/secrets/{secret_name}"
+    try:
+        client = _secret_client()
+        _assert_secret_permissions(client, parent)
+        latest = _access_secret_version(client, f"{parent}/versions/latest")
+        secrets = json.loads(latest.payload.data.decode("utf-8"))
+        if not isinstance(secrets, dict):
+            raise SecretPersistenceError("The consolidated secret JSON must be an object.")
+    except SecretPersistenceError:
+        raise
+    except Exception as exc:
+        _logger.exception("Could not validate Secret Manager before rotating credentials.")
+        raise SecretPersistenceError(
+            "Could not verify Secret Manager access before rotating credentials."
+        ) from exc
+
+
 def persist_values(env_path: Path, updates: Mapping[str, str]) -> None:
     """Persist credential updates together in one version of the existing secret.
 

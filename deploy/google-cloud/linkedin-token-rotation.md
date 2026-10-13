@@ -51,7 +51,7 @@ the limit.
 
 ## Rotation and recovery behavior
 
-The sequence is: check permissions, read `latest`, add one JSON version, read
+Before contacting LinkedIn, the application checks that Cloud Run metadata, Secret Manager permissions, and the current JSON payload are valid. This avoids rotating a refresh token when durable storage is already known to be unavailable. After LinkedIn responds, the sequence is: read `latest`, add one JSON version, read
 that exact version back, validate its full contents, confirm it remains
 `latest`, then destroy every older non-destroyed version. Destruction is
 irreversible. If write-back validation fails, no old version is destroyed. If

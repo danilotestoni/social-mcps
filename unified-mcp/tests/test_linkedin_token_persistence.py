@@ -5,8 +5,8 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import TestCase
-from unittest.mock import Mock, call, patch
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -156,3 +156,57 @@ class SecretVersionRotationTests(TestCase):
                     Path("unused.env"),
                     {access_key: "new-access", expiry_key: "1234567890"},
                 )
+
+
+class LinkedInRefreshRecoveryTests(IsolatedAsyncioTestCase):
+    async def test_preflight_failure_prevents_remote_token_rotation(self) -> None:
+        from auth.linkedin_auth import LinkedInTokenManager
+
+        manager = LinkedInTokenManager(Path("unused.env"))
+        env = {
+            "LINKEDIN_CLIENT_ID": "client",
+            "LINKEDIN_CLIENT_SECRET": "secret",
+            "LINKEDIN_ACCESS_TOKEN": "old-access",
+            "LINKEDIN_REFRESH_TOKEN": "old-refresh",
+            "LINKEDIN_TOKEN_EXPIRY": "1",
+            "LINKEDIN_PERSON_URN": "urn:li:person:test",
+        }
+        with (
+            patch("auth.linkedin_auth.env_values", return_value=env),
+            patch("auth.linkedin_auth.preflight_persistence", side_effect=config.SecretPersistenceError("no permissions")),
+            patch.object(manager, "refresh", new=AsyncMock()) as refresh,
+        ):
+            with self.assertRaises(config.SecretPersistenceError):
+                await manager.get_valid_token()
+
+        refresh.assert_not_awaited()
+
+    async def test_persistence_failure_keeps_rotated_credentials_in_memory(self) -> None:
+        from auth.linkedin_auth import LinkedInTokenManager
+        from core.models import LinkedInTokenData
+
+        manager = LinkedInTokenManager(Path("unused.env"))
+        env = {
+            "LINKEDIN_CLIENT_ID": "client",
+            "LINKEDIN_CLIENT_SECRET": "secret",
+            "LINKEDIN_ACCESS_TOKEN": "old-access",
+            "LINKEDIN_REFRESH_TOKEN": "old-refresh",
+            "LINKEDIN_TOKEN_EXPIRY": "1",
+            "LINKEDIN_PERSON_URN": "urn:li:person:test",
+        }
+        token_data = LinkedInTokenData(
+            access_token="new-access", refresh_token="new-refresh",
+            expires_in=3600, token_expiry=9999999999,
+        )
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("auth.linkedin_auth.env_values", return_value=env),
+            patch("auth.linkedin_auth.preflight_persistence"),
+            patch.object(manager, "refresh", new=AsyncMock(return_value=token_data)),
+            patch.object(manager, "persist", side_effect=config.SecretPersistenceError("transient failure")),
+        ):
+            self.assertEqual(await manager.get_valid_token(), "new-access")
+
+        self.assertEqual(os.environ["LINKEDIN_ACCESS_TOKEN"], "new-access")
+        self.assertEqual(os.environ["LINKEDIN_REFRESH_TOKEN"], "new-refresh")
+        self.assertEqual(os.environ["LINKEDIN_TOKEN_EXPIRY"], "9999999999")

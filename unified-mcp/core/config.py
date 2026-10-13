@@ -109,10 +109,10 @@ def _destroy_obsolete_versions(client, parent: str, keep_version: str) -> None:
             client.destroy_secret_version(request={"name": version.name})
 
 
-def preflight_persistence() -> None:
+def preflight_persistence() -> dict[str, str] | None:
     """Validate Cloud Run Secret Manager access before requesting token rotation."""
     if not os.environ.get(CONSOLIDATED_SECRETS_ENV_VAR):
-        return
+        return None
 
     secret_name = os.environ.get(CONSOLIDATED_SECRET_NAME_ENV_VAR)
     project_id = _project_id()
@@ -131,6 +131,7 @@ def preflight_persistence() -> None:
         secrets = json.loads(latest.payload.data.decode("utf-8"))
         if not isinstance(secrets, dict):
             raise SecretPersistenceError("The consolidated secret JSON must be an object.")
+        return {key: str(value) for key, value in secrets.items()}
     except SecretPersistenceError:
         raise
     except Exception as exc:

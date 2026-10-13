@@ -14,17 +14,23 @@ _logger = get_logger(__name__)
 CONSOLIDATED_SECRETS_ENV_VAR = "SOCIAL_MCPS_SECRETS_JSON"
 CONSOLIDATED_SECRET_NAME_ENV_VAR = "SOCIAL_MCPS_SECRET_NAME"
 GCP_PROJECT_ENV_VARS = ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT")
+_REQUIRED_SECRET_PERMISSIONS = (
+    "secretmanager.versions.access",
+    "secretmanager.versions.add",
+    "secretmanager.versions.destroy",
+    "secretmanager.versions.list",
+)
+
+
+class SecretPersistenceError(RuntimeError):
+    """A refreshed credential set could not be safely persisted and rotated."""
 
 
 def load_consolidated_secrets(raw: str | None = None) -> None:
     """
     Cloud Run injects every platform credential as ONE JSON-encoded secret
-    (SOCIAL_MCPS_SECRETS_JSON) instead of one Secret Manager secret per
-    credential, to stay within GCP's free tier of active secret versions.
-    Populates os.environ from it so the rest of the app (env_values, auth
-    managers) keeps reading credentials exactly as before. Local runs never
-    set this var and keep reading unified-mcp/.env unchanged — this is a
-    no-op when the var is absent.
+    (SOCIAL_MCPS_SECRETS_JSON). Populate os.environ so auth managers keep
+    reading credentials as before. Local runs without this variable use .env.
     """
     raw_value = raw if raw is not None else os.environ.get(CONSOLIDATED_SECRETS_ENV_VAR)
     if not raw_value:
@@ -57,43 +63,103 @@ def _secret_client():
     return secretmanager.SecretManagerServiceClient()
 
 
-def _read_latest_secret(client, project_id: str, secret_name: str) -> str:
-    version_name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
-    response = client.access_secret_version(request={"name": version_name})
-    return response.payload.data.decode("utf-8")
+def _access_secret_version(client, version_name: str):
+    return client.access_secret_version(request={"name": version_name})
+
+
+def _assert_secret_permissions(client, parent: str) -> None:
+    response = client.test_iam_permissions(
+        request={"resource": parent, "permissions": list(_REQUIRED_SECRET_PERMISSIONS)}
+    )
+    missing = set(_REQUIRED_SECRET_PERMISSIONS) - set(response.permissions)
+    if missing:
+        raise SecretPersistenceError(
+            "Cloud Run's service account lacks required permissions on the existing "
+            f"consolidated secret: {', '.join(sorted(missing))}"
+        )
+
+
+def _assert_latest_version(client, parent: str, expected_version: str) -> None:
+    latest = _access_secret_version(client, f"{parent}/versions/latest")
+    if latest.name != expected_version:
+        raise SecretPersistenceError(
+            "The consolidated secret changed concurrently; refusing to destroy "
+            "versions based on a stale refresh."
+        )
+
+
+def _destroy_obsolete_versions(client, parent: str, keep_version: str) -> None:
+    # Secret Manager charges for both ENABLED and DISABLED versions. Destroy
+    # old versions only after the replacement has been read back and checked.
+    for version in client.list_secret_versions(request={"parent": parent}):
+        if version.name == keep_version or version.state == 3:  # DESTROYED
+            continue
+        client.destroy_secret_version(request={"name": version.name})
 
 
 def persist_values(env_path: Path, updates: Mapping[str, str]) -> None:
-    """Persist a set of values atomically as one version of the consolidated secret.
+    """Persist credential updates together in one version of the existing secret.
 
-    Cloud Run reads the latest secret JSON immediately before writing so fields
-    changed by other instances are preserved. Local development continues to
-    update the process environment and .env file.
+    In Cloud Run, fail closed if consolidated-secret metadata is missing.
+    Verify the new JSON before destroying older versions. Locally, retain the
+    existing .env behavior.
     """
     if not updates:
         return
 
-    os.environ.update(updates)
-    secret_name = os.environ.get(CONSOLIDATED_SECRET_NAME_ENV_VAR)
-    project_id = _project_id()
-    if not secret_name or not project_id or not os.environ.get(CONSOLIDATED_SECRETS_ENV_VAR):
+    raw_secret = os.environ.get(CONSOLIDATED_SECRETS_ENV_VAR)
+    if not raw_secret:
+        os.environ.update(updates)
         _persist_env_file(env_path, updates)
         return
 
+    secret_name = os.environ.get(CONSOLIDATED_SECRET_NAME_ENV_VAR)
+    project_id = _project_id()
+    if not secret_name or not project_id:
+        raise SecretPersistenceError(
+            "Cloud Run has SOCIAL_MCPS_SECRETS_JSON but is missing "
+            "SOCIAL_MCPS_SECRET_NAME or GOOGLE_CLOUD_PROJECT/GCP_PROJECT; "
+            "refusing to fall back to ephemeral .env storage."
+        )
+
+    client = _secret_client()
+    parent = f"projects/{project_id}/secrets/{secret_name}"
     try:
-        client = _secret_client()
-        secrets = json.loads(_read_latest_secret(client, project_id, secret_name))
+        _assert_secret_permissions(client, parent)
+        latest = _access_secret_version(client, f"{parent}/versions/latest")
+        secrets = json.loads(latest.payload.data.decode("utf-8"))
+        if not isinstance(secrets, dict):
+            raise SecretPersistenceError("The consolidated secret JSON must be an object.")
         secrets.update(updates)
         payload = json.dumps(secrets, separators=(",", ":"), ensure_ascii=False)
-        parent = f"projects/{project_id}/secrets/{secret_name}"
-        client.add_secret_version(
+        created = client.add_secret_version(
             request={"parent": parent, "payload": {"data": payload.encode("utf-8")}}
         )
+        if not created.name:
+            raise SecretPersistenceError("Secret Manager did not return the created version name.")
+
+        saved = _access_secret_version(client, created.name)
+        if saved.name != created.name or json.loads(saved.payload.data.decode("utf-8")) != secrets:
+            raise SecretPersistenceError(
+                "The new consolidated secret version did not match the refreshed credentials."
+            )
+        _assert_latest_version(client, parent, created.name)
+
+        # Use verified rotated tokens in this instance before cleanup. If
+        # cleanup fails, do not retry with a refresh token LinkedIn may revoke.
+        os.environ.update(updates)
         os.environ[CONSOLIDATED_SECRETS_ENV_VAR] = payload
-        _logger.info("Persisted %d credential value(s) in consolidated Secret Manager secret.", len(updates))
+        _destroy_obsolete_versions(client, parent, created.name)
+        _logger.info(
+            "Persisted credential updates in one version and destroyed superseded versions."
+        )
+    except SecretPersistenceError:
+        raise
     except Exception as exc:
-        _logger.error("Could not persist credential set in consolidated Secret Manager secret: %s", exc)
-        _persist_env_file(env_path, updates)
+        _logger.exception("Could not safely persist/rotate the consolidated Secret Manager version.")
+        raise SecretPersistenceError(
+            "Could not safely persist or clean up the consolidated Secret Manager version."
+        ) from exc
 
 
 def persist_value(env_path: Path, key: str, value: str) -> None:

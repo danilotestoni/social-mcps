@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from core.models import LinkedInTokenData
 
 _TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
 _WARNING_WINDOW = 7 * 24 * 3600  # 7 days in seconds
+_TOKEN_REFRESH_LOCK = asyncio.Lock()
 
 _REQUIRED_KEYS = (
     "LINKEDIN_CLIENT_ID",
@@ -95,21 +97,24 @@ class LinkedInTokenManager:
         self._logger.debug("Updated tokens persisted.")
 
     async def get_valid_token(self) -> str:
-        env = self.load()
-        expiry = int(env["LINKEDIN_TOKEN_EXPIRY"])
-        self.warn_if_expiring_soon(expiry)
-        if self.is_expired(expiry):
-            refresh_token = env.get("LINKEDIN_REFRESH_TOKEN", "")
-            if not refresh_token:
-                raise AuthError(
-                    "LinkedIn access token has expired and no refresh token is available. "
-                    "Run oauth_setup.py to obtain a new access token."
+        # One Cloud Run instance is configured for one request at a time; this
+        # process-wide lock also protects multiple managers in that instance.
+        async with _TOKEN_REFRESH_LOCK:
+            env = self.load()
+            expiry = int(env["LINKEDIN_TOKEN_EXPIRY"])
+            self.warn_if_expiring_soon(expiry)
+            if self.is_expired(expiry):
+                refresh_token = env.get("LINKEDIN_REFRESH_TOKEN", "")
+                if not refresh_token:
+                    raise AuthError(
+                        "LinkedIn access token has expired and no refresh token is available. "
+                        "Run oauth_setup.py to obtain a new access token."
+                    )
+                token_data = await self.refresh(
+                    env["LINKEDIN_CLIENT_ID"],
+                    env["LINKEDIN_CLIENT_SECRET"],
+                    refresh_token,
                 )
-            token_data = await self.refresh(
-                env["LINKEDIN_CLIENT_ID"],
-                env["LINKEDIN_CLIENT_SECRET"],
-                refresh_token,
-            )
-            self.persist(token_data)
-            return token_data.access_token
-        return env["LINKEDIN_ACCESS_TOKEN"]
+                self.persist(token_data)
+                return token_data.access_token
+            return env["LINKEDIN_ACCESS_TOKEN"]

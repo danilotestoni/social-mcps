@@ -39,6 +39,11 @@ SERVICE="${SOCIALMCPS_CLOUD_RUN_SERVICE:-unified-mcp}"
 REGION="${SOCIALMCPS_CLOUD_RUN_REGION:-europe-west1}"
 SECRET_NAME="social-mcps-credentials"
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export QUEUE_GCS_BUCKET="${QUEUE_GCS_BUCKET:-social-mcps-queue}"
+export GOOGLE_CLOUD_PROJECT="${PROJECT}"
+export PYTHONPATH="${SCRIPT_DIR}/../../unified-mcp${PYTHONPATH:+:${PYTHONPATH}}"
+
 usage() {
   echo "Uso: $0 <CLAVE_JSON> <valor|-> [--restart]" >&2
   echo "  <valor|-> : valor nuevo del campo, o '-' para leerlo de stdin" >&2
@@ -70,7 +75,19 @@ if [ -z "$NEW_VALUE" ]; then
 fi
 
 TMP_FILE="$(mktemp)"
-trap 'rm -f "$TMP_FILE"' EXIT
+LOCK_TOKEN=""
+cleanup() {
+  rm -f "$TMP_FILE"
+  if [ -n "$LOCK_TOKEN" ]; then
+    python3 -m core.secret_rotation_lock release "$LOCK_TOKEN" --gcloud >/dev/null || \
+      echo "ADVERTENCIA: no se pudo liberar el bloqueo; caducará automáticamente." >&2
+  fi
+}
+trap cleanup EXIT
+
+# Usa el mismo bloqueo que el refresh automático de Cloud Run desde antes de
+# leer latest y hasta terminar la destrucción de versiones anteriores.
+LOCK_TOKEN="$(python3 -m core.secret_rotation_lock acquire --gcloud)"
 
 # Descarga el JSON actual, sustituye un solo campo con jq y vuelve a subirlo
 # como nueva versión — sin volcar el contenido completo a stdout/logs.

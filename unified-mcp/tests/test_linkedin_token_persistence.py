@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import config
+from core.secret_rotation_lock import secret_rotation_lock
 
 
 class SecretVersionRotationTests(TestCase):
@@ -209,3 +210,14 @@ class LinkedInRefreshRecoveryTests(IsolatedAsyncioTestCase):
             self.assertEqual(os.environ["LINKEDIN_ACCESS_TOKEN"], "new-access")
             self.assertEqual(os.environ["LINKEDIN_REFRESH_TOKEN"], "new-refresh")
             self.assertEqual(os.environ["LINKEDIN_TOKEN_EXPIRY"], "9999999999")
+
+
+class SecretRotationLockTests(TestCase):
+    def test_local_persistence_does_not_require_cloud_lock_bucket(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "core.secret_rotation_lock.acquire_rotation_lock"
+        ) as acquire:
+            with secret_rotation_lock():
+                self.assertIsNone(os.environ.get(config.CONSOLIDATED_SECRETS_ENV_VAR))
+
+        acquire.assert_not_called()

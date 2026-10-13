@@ -34,10 +34,14 @@ secret-level access is sufficient.
 
 ## Serialize refreshes
 
-An in-process lock prevents overlapping refresh requests in one instance.
+A shared lock object in the existing `QUEUE_GCS_BUCKET` serializes automatic
+refreshes with `rotate-secret.sh`; a process-level lock also prevents
+simultaneous refreshes within one instance.
 Secret Manager's add-version API does not provide compare-and-swap for the
-`latest` alias, so keep the service at one instance with one concurrent request
-while this refresh path is enabled:
+`latest` alias. The shared lock uses a temporary object in the existing
+`QUEUE_GCS_BUCKET`; Cloud Run's service account needs object create, read, and
+delete access on that bucket. The rotation script uses the same lock. Keep the
+service at one instance with one concurrent request while this refresh path is enabled:
 
 ```sh
 gcloud run services update unified-mcp \
@@ -45,13 +49,11 @@ gcloud run services update unified-mcp \
   --max-instances=1 --concurrency=1
 ```
 
-This is a deployment requirement, not applied by this code change. If the
-service later needs multiple instances, add a distributed lock before raising
-the limit.
+This is a deployment requirement, not applied by this code change. Keep the shared lock enabled if the service later needs multiple instances.
 
 ## Rotation and recovery behavior
 
-Before contacting LinkedIn, the application checks that Cloud Run metadata, Secret Manager permissions, and the current JSON payload are valid. This avoids rotating a refresh token when durable storage is already known to be unavailable. After LinkedIn responds, the sequence is: read `latest`, add one JSON version, read
+Before contacting LinkedIn, the application acquires the shared lock and checks that Cloud Run metadata, Secret Manager permissions, and the current JSON payload are valid. This avoids rotating a refresh token when durable storage is already known to be unavailable. After LinkedIn responds, the sequence is: read `latest`, add one JSON version, read
 that exact version back, validate its full contents, confirm it remains
 `latest`, then destroy every older non-destroyed version. Destruction is
 irreversible. If write-back validation fails, no old version is destroyed. If

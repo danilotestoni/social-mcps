@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 
-from core.config import env_values, persist_value
+from core.config import env_values, persist_values
 from core.logger import get_logger
 from core.models import LinkedInTokenData
 
@@ -84,9 +84,14 @@ class LinkedInTokenManager:
         return token_data
 
     def persist(self, token_data: LinkedInTokenData) -> None:
-        persist_value(self._env_path, "LINKEDIN_ACCESS_TOKEN", token_data.access_token)
-        persist_value(self._env_path, "LINKEDIN_REFRESH_TOKEN", token_data.refresh_token)
-        persist_value(self._env_path, "LINKEDIN_TOKEN_EXPIRY", str(token_data.token_expiry))
+        persist_values(
+            self._env_path,
+            {
+                "LINKEDIN_ACCESS_TOKEN": token_data.access_token,
+                "LINKEDIN_REFRESH_TOKEN": token_data.refresh_token,
+                "LINKEDIN_TOKEN_EXPIRY": str(token_data.token_expiry),
+            },
+        )
         self._logger.debug("Updated tokens persisted.")
 
     async def get_valid_token(self) -> str:

@@ -214,7 +214,8 @@ def test_human_page_requires_visual_and_publication_confirmation(queue, monkeypa
             for channel in ("facebook", "threads"):
                 assert f'name="channel" value="{channel}" checked'.encode() in page.content
             assert b'name="actor" placeholder="Tu nombre (opcional)"' in page.content
-            assert b'<textarea name="observation"' in page.content
+            assert b'name="observation"' in page.content
+            assert b'name="viewport"' in page.content and b"prefers-color-scheme:dark" in page.content
             assert b'name="actor" placeholder="Tu nombre" required' not in page.content
             assert b'name="observation" required' not in page.content
             incomplete = await client.post(link, data={"version": item["version"], "actor": "Dani"})
@@ -231,6 +232,89 @@ def test_human_page_requires_visual_and_publication_confirmation(queue, monkeypa
             assert (await client.post(link, data={"version": item["version"]})).status_code == 409
             assert (await client.get(service.asset_url(item))).content.startswith(b"\x89PNG")
     asyncio.run(scenario())
+
+
+def test_single_approve_button_is_enough(queue, monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "test-key")
+    async def scenario():
+        service, item = await ready(queue, approved=False)
+        link = (await service.review_link("nvidia"))["review_url"]
+        app = EditorialHTTP(None, service)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="https://test.example") as client:
+            page = await client.get(link)
+            assert b'name="action" value="approve"' in page.content
+            assert b'name="semantic_match"' not in page.content and b'name="authorized"' not in page.content
+            accepted = await client.post(link, data={"version": item["version"], "action": "approve",
+                                                     "channel": ["threads"]})
+            assert accepted.status_code == 200 and b"Threads" in accepted.content
+        approval = (await service.queue.get_item("nvidia"))["editorial"]["approval"]
+        assert approval["channels"] == ["threads"] and approval["publication_authorized"] is True
+    asyncio.run(scenario())
+
+
+def test_reconcile_several_channels_in_one_form_submission(queue, monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "test-key")
+    async def scenario():
+        service, _ = await ready(queue)
+        service._dispatch = AsyncMock(side_effect=TimeoutError())
+        await service.publish("nvidia", 1, 1, "facebook", "agent")
+        await service.publish("nvidia", 1, 1, "threads", "agent")
+        item = await queue.get_item("nvidia")
+        link = (await service.review_link("nvidia"))["review_url"]
+        app = EditorialHTTP(None, service)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="https://test.example") as client:
+            page = await client.get(link)
+            assert b"Conciliar canales" in page.content and b'name="outcome_facebook"' in page.content
+            assert "La aprobación sigue vigente".encode() in page.content  # no approve button while locked
+            saved = await client.post(link, data={
+                "version": item["version"], "action": "reconcile",
+                "outcome_facebook": "absent", "url_facebook": "",
+                "outcome_threads": "published", "url_threads": "https://www.threads.com/@dani/post/DeeBgWjDBJe"})
+            assert saved.status_code == 200, saved.text
+        item = await queue.get_item("nvidia")
+        assert "facebook" not in item["editorial"]["attempts"]  # released for a new attempt
+        assert item["canales"]["threads"]["id"] == "DeeBgWjDBJe"
+        assert len(item["reconciliations"]) == 2
+    asyncio.run(scenario())
+
+
+def test_reconcile_tool_records_external_publication_and_closes_news(queue, monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "test-key")
+    async def scenario():
+        service, _ = await ready(queue)
+        service._dispatch = AsyncMock(return_value={"success": True, "data": {"post_id": "fb-1"}})
+        await service.publish("nvidia", 1, 1, "facebook", "agent")
+        # Threads was never attempted by the server (published by hand): only the URL is needed.
+        result = await service.reconcile("nvidia", [
+            {"channel": "threads", "outcome": "published", "url": "https://www.threads.com/@dani/post/ABC123"}], "")
+        assert result["canales"]["threads"]["id"] == "ABC123"
+        assert result["estado"] == "publicada"
+        with pytest.raises(flow.EditorialError):
+            await service.reconcile("nvidia", [{"channel": "threads", "outcome": "published",
+                                                "url": "https://x"}], "agent")
+    asyncio.run(scenario())
+
+
+def test_reconcile_requires_https_url_and_existing_attempt_for_absent(queue):
+    async def scenario():
+        service, _ = await ready(queue)
+        with pytest.raises(flow.EditorialError, match="URL"):
+            await service.reconcile("nvidia", [{"channel": "facebook", "outcome": "published", "url": ""}], "a")
+        with pytest.raises(flow.EditorialError, match="intento"):
+            await service.reconcile("nvidia", [{"channel": "facebook", "outcome": "absent"}], "a")
+        with pytest.raises(flow.EditorialError):
+            await service.reconcile("nvidia", [], "a")
+        assert "reconciliations" not in await queue.get_item("nvidia")
+    asyncio.run(scenario())
+
+
+def test_external_id_derived_from_permalinks():
+    from core.editorial_http import derive_external_id
+    assert derive_external_id("x", "https://x.com/EseDeTe/status/2110291835042287662") == "2110291835042287662"
+    assert derive_external_id("threads", "https://www.threads.com/@d/post/DeeBgWjDBJe") == "DeeBgWjDBJe"
+    assert derive_external_id("linkedin", "https://es.linkedin.com/posts/s_gemini-activity-7515746204731826178-7c-1"
+                              ) == "urn:li:activity:7515746204731826178"
+    assert derive_external_id("facebook", "https://facebook.com/p/1") == "https://facebook.com/p/1"
 
 
 def test_local_or_untrusted_source_rejected_without_request():

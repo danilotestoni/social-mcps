@@ -158,7 +158,7 @@ def finish(item, channel, result):
         }
         if channel == "wordpress":
             item["url_wordpress"] = data.get("url")
-        if all(item["canales"].get(c, {}).get("estado") == "publicado"
-               for c in item["editorial"]["approval"]["channels"]):
+        expected = (item["editorial"].get("approval") or {}).get("channels") or list(item["editorial"]["payloads"])
+        if all(item["canales"].get(c, {}).get("estado") == "publicado" for c in expected):
             item.update(estado="publicada", fecha_publicada=now())
     audit(item, attempt["state"] + ":" + channel, attempt["actor"])

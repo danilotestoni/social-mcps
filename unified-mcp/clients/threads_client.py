@@ -121,7 +121,7 @@ class ThreadsClient:
             async with httpx.AsyncClient(base_url=_BASE_URL, timeout=_REQUEST_TIMEOUT) as client:
                 response = await client.get(
                     f"/{container_id}",
-                    params={"fields": "status,error_type"},
+                    params={"fields": "status,error_message"},
                     headers=headers,
                 )
             self._raise_for_status(response)
@@ -131,9 +131,9 @@ class ThreadsClient:
                 # Empty status means the container is ready (common for TEXT posts)
                 return status
             if status in ("ERROR", "EXPIRED"):
-                error_type = data.get("error_type", "unknown")
+                error_message = data.get("error_message", "unknown")
                 raise ThreadsAPIError(
-                    f"Container {container_id} failed with status: {status}, error: {error_type}"
+                    f"Container {container_id} failed with status: {status}, error: {error_message}"
                 )
             self._logger.debug(
                 "Container %s status: %s (attempt %d/%d)",

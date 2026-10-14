@@ -111,6 +111,15 @@ class EditorialService:
                 "instruction": "El usuario debe abrir el enlace, inspeccionar la imagen y autorizar. "
                                "Los agentes nunca rellenan ni envían este formulario."}
 
+    async def reconcile(self, news_id, results, actor):
+        from core.editorial_http import reconcile_many
+        item = await self.queue.get_item(news_id)
+        flow.active(item)
+        saved = await self.queue.transition(news_id, item["version"],
+                                            lambda current: reconcile_many(current, results, actor))
+        return {"estado": saved.get("estado"), "canales": saved.get("canales"),
+                "reconciled": [entry.get("channel") for entry in results]}
+
     def asset_url(self, item):
         e = item["editorial"]
         token = mint("editorial-asset:" + item["id"] + ":" + e["image"]["sha256"], int(time.time()) + 3600)

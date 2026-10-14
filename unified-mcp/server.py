@@ -779,11 +779,25 @@ if _ENABLED["QUEUE"]:
 
     @mcp.tool()
     async def editorial_request_review(news_id: str) -> dict:
-        """Get a temporary human review/reconciliation link. Show it to the user.
+        """Get a temporary (30 min) mobile-friendly human review link. Show it to the user.
+        The page approves image+texts for the selected channels and can reconcile several channels at once.
         Agents MUST NOT fill/submit this form or claim that metadata proves visual correspondence.
         The user inspects the actual image and explicitly authorizes selected channels.
         """
         return await result_of(_editorial().review_link(news_id))
+
+    @mcp.tool()
+    async def editorial_reconcile(news_id: str, results: list[dict], actor: str) -> dict:
+        """Record the real outcome of one or more channels in a single call, without the web form.
+        results: [{"channel": "threads", "outcome": "published", "url": "https://..."},
+                  {"channel": "x", "outcome": "absent"}]. Optional per entry: external_id, evidence.
+        outcome "published" needs the public https URL (the ID is derived from it when possible) and also
+        covers channels published outside the server (e.g. X from the user's machine).
+        outcome "absent" releases an uncertain attempt so it can be retried.
+        Use only with the user's explicit statement in chat or after verifying the platform with read tools;
+        never infer absence from a timeout. Content approval still requires the user's review link.
+        """
+        return await result_of(_editorial().reconcile(news_id, results, actor))
 
     @mcp.tool()
     async def editorial_publish(news_id: str, news_revision: int, image_revision: int,

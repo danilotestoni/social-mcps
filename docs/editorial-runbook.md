@@ -26,14 +26,14 @@ Ningún agente publica noticias sin autorización explícita del usuario.
    Para Claude/Codex sin generador nativo: `generate_image(prompt=visual_prompt,
    news_id, generation_id, upload_to_wordpress=false)` genera y vincula en servidor.
    No se debe llamar a `upload_temp_image` como sustituto de la vinculación.
-5. `editorial_request_review(news_id)` devuelve un enlace de 30 minutos. El
-   **usuario** abre el enlace e inspecciona imagen/noticia/textos. Todos los canales
-   preparados aparecen seleccionados por defecto. Confirma correspondencia
-   semántica y autoriza expresamente la publicación. Nombre y comentario son
-   opcionales. Si no ve la imagen, reconoce otra marca/noticia o no está seguro,
-   no aprueba. Los agentes no envían ese formulario. La aprobación no se crea desde
-   parámetros MCP ni metadatos. Tras guardar, vuelve al chat y escribe «publica»;
-   el formulario no invoca plataformas sociales.
+5. `editorial_request_review(news_id)` devuelve un enlace de 30 minutos a una página
+   adaptada a móvil (también usable en web/app, modo claro y oscuro). El **usuario**
+   ve la imagen y el texto de cada canal, desmarca los canales que no quiera y pulsa
+   **«Aprobar y publicar»**: ese único botón confirma la correspondencia visual y
+   autoriza los canales marcados. Nombre y nota son opcionales. Si no ve la imagen o
+   corresponde a otra noticia, no aprueba. Los agentes no envían ese formulario y la
+   aprobación no se crea desde parámetros MCP. Tras guardar, vuelve al chat y escribe
+   «publica»; el formulario no invoca plataformas sociales.
 6. `queue_get` para consultar revisiones y aprobación persistente.
    `editorial_publish(news_id, news_revision, image_revision, channel, actor,
    dry_run=true)` comprueba sin publicar ni reservar.
@@ -75,12 +75,24 @@ una publicación fallida: incluso un rechazo necesita reconciliación conservado
 Los clientes de publicación solo reintentan errores de conexión previos al envío;
 las lecturas/polling y preparación de contenedores conservan su comportamiento.
 
-Para resolver: consultar la plataforma con herramientas de lectura y abrir
-`editorial_request_review`. El usuario selecciona canal y aporta evidencia:
+Para resolver hay dos vías equivalentes, ambas multicanal:
 
-- Publicación existente: confirma manualmente ID y URL. Se conserva resultado.
-- Ausencia comprobada: libera ese intento, conserva evidencia y permite un nuevo
+- `editorial_reconcile(news_id, results, actor)` desde el chat, cuando el usuario
+  indica el resultado o un agente lo verificó con herramientas de lectura de la
+  plataforma. `results` es una lista: `{"channel", "outcome": "published"|"absent",
+  "url"?, "external_id"?, "evidence"?}`. No requiere formulario.
+- La sección «Conciliar canales» de la página de revisión, que permite marcar
+  varios canales en un solo envío.
+
+Reglas comunes:
+
+- Publicado: basta la URL https; el ID se deduce de ella cuando es posible (X,
+  Threads, LinkedIn). Sirve también para canales publicados fuera del servidor
+  (por ejemplo X desde el equipo local), aunque no haya intento previo.
+- No publicado: libera el intento incierto, conserva el recibo y permite un nuevo
   intento explícito. Un timeout por sí solo no demuestra ausencia.
+- Cuando todos los canales aprobados quedan confirmados, la noticia pasa a
+  `publicada` automáticamente.
 
 Si GCS falla al guardar después de la API, la respuesta incluye evidencia externa
 cuando es posible. No repetir la API; reconciliar con esa evidencia. No marcar un

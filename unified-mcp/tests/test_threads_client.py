@@ -45,6 +45,26 @@ class ThreadsClientPublishTests(TestCase):
                 asyncio.run(client.publish_thread_details("NVIDIA", allow_ambiguous_recovery=False))
         self.assertEqual(sum(path.endswith("/threads_publish") for _, path in calls), 1)
 
+    def test_container_poll_requests_only_fields_the_api_supports(self) -> None:
+        # The real Threads API rejects unknown fields such as `error_type` with a 400
+        # ("Tried accessing nonexisting field"), which left every editorial post uncertain.
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/threads") and request.method == "POST":
+                return httpx.Response(200, json={"id": "container-123"})
+            if request.url.path.endswith("/container-123") and request.method == "GET":
+                fields = set(request.url.params["fields"].split(","))
+                if not fields <= {"id", "status", "error_message"}:
+                    return httpx.Response(400, json={"error": {"message": "Tried accessing nonexisting field"}})
+                return httpx.Response(200, json={"status": "FINISHED"})
+            if request.url.path.endswith("/threads_publish") and request.method == "POST":
+                return httpx.Response(200, json={"id": "thread-456"})
+            raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+        with _install_mock_transport(handler):
+            client = ThreadsClient(_FakeTokenManager(), "user-1")
+            result = asyncio.run(client.publish_thread_details("Hola", allow_ambiguous_recovery=False))
+        self.assertIn("thread-456", str(result))
+
     def test_text_post_waits_for_finished_container_before_publish(self) -> None:
         calls = {"poll": 0}
 

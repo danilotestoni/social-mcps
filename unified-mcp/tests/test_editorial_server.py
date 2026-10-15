@@ -24,6 +24,39 @@ def server(monkeypatch):
     return module
 
 
+def test_http_transport_is_stateless_json_without_sse_streams(server, monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("FACEBOOK_PAGE_ID", "page-1")
+    monkeypatch.setattr(server, "_CONTEXT", None)
+    headers = {"accept": "application/json, text/event-stream", "content-type": "application/json",
+               "host": "localhost:8000"}
+
+    async def scenario():
+        app = server.NoStandaloneSSEMiddleware(server.mcp.streamable_http_app())
+        async with server.mcp.session_manager.run():
+            transport = httpx.ASGITransport(app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8000") as client:
+                init = await client.post("/mcp", headers=headers, json={
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                        "protocolVersion": "2025-03-26", "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "1"}}})
+                assert init.status_code == 200
+                assert init.headers["content-type"].startswith("application/json")
+                assert "mcp-session-id" not in init.headers
+                context_after_first = server._CONTEXT
+                for request_id in (2, 3):  # no session header needed between requests
+                    call = await client.post("/mcp", headers=headers, json={
+                        "jsonrpc": "2.0", "id": request_id, "method": "tools/call",
+                        "params": {"name": "list_enabled_platforms", "arguments": {}}})
+                    assert call.status_code == 200 and call.json()["result"]["isError"] is False
+                assert server._CONTEXT is context_after_first  # clients built once per process
+                stream = await client.get("/mcp", headers={"accept": "text/event-stream", "host": "localhost:8000"})
+                assert stream.status_code == 405  # no long-lived SSE stream to hold a Cloud Run slot
+
+    asyncio.run(scenario())
+
+
 def test_tools_registered_without_approval_tool(server):
     async def scenario():
         tools = {t.name: t for t in await server.mcp.list_tools()}

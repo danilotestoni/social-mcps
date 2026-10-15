@@ -89,8 +89,20 @@ _logger.info(
 )
 
 
+_CONTEXT: dict | None = None
+
+
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
+    # Stateless HTTP enters the lifespan once per request: build the clients
+    # once per process and share them, like the previous long-lived session did.
+    global _CONTEXT
+    if _CONTEXT is None:
+        _CONTEXT = _build_context()
+    yield _CONTEXT
+
+
+def _build_context() -> dict:
     env = env_values(_ENV_PATH)
     context: dict = {}
 
@@ -173,7 +185,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
         from tools.editorial_tools import EditorialService
         context["editorial"] = EditorialService(context["queue"], context, env.get("PUBLIC_BASE_URL", ""))
 
-    yield context
+    return context
 
 
 def _transport_security() -> TransportSecuritySettings:
@@ -198,7 +210,12 @@ def _transport_security() -> TransportSecuritySettings:
     )
 
 
-mcp = FastMCP("social-unified", lifespan=lifespan, transport_security=_transport_security())
+# Stateless JSON responses over HTTP: clients never hold long-lived GET /mcp SSE
+# streams, which on a single Cloud Run instance filled every concurrency slot and
+# turned new requests into 429 "no available instance" (seen as connection timeouts).
+# Progress notifications are dropped in this mode; results are unaffected. stdio is unchanged.
+mcp = FastMCP("social-unified", lifespan=lifespan, transport_security=_transport_security(),
+              stateless_http=True, json_response=True)
 
 
 @mcp.tool()
@@ -952,6 +969,26 @@ if _ENABLED["QUEUE"]:
 
 # ── HTTP auth (public deployments) ────────────────────────────────────────────
 
+class NoStandaloneSSEMiddleware:
+    """
+    Answer GET /mcp with 405, as the MCP spec allows when the server offers no
+    standalone SSE stream. In stateless mode the server never pushes messages,
+    yet the SDK would still keep such a GET open indefinitely and, on a single
+    Cloud Run instance, every open stream holds a concurrency slot.
+    """
+
+    def __init__(self, app) -> None:
+        self._app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and scope.get("method") == "GET" and scope.get("path", "").rstrip("/") == "/mcp":
+            await send({"type": "http.response.start", "status": 405,
+                        "headers": [(b"allow", b"POST, DELETE"), (b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": b'{"error":"standalone SSE stream not offered"}'})
+            return
+        await self._app(scope, receive, send)
+
+
 class BearerAuthMiddleware:
     """
     Pure-ASGI bearer-token check for public HTTP deployments. Rejects any
@@ -1057,7 +1094,7 @@ if __name__ == "__main__":
         # Remote use (Render): streamable-http behind optional bearer auth.
         import uvicorn
 
-        app = mcp.streamable_http_app()
+        app = NoStandaloneSSEMiddleware(mcp.streamable_http_app())
         auth_token = os.getenv("MCP_AUTH_TOKEN", "").strip()
         if auth_token:
             app = BearerAuthMiddleware(app, auth_token)

@@ -41,15 +41,20 @@ Secret Manager's add-version API does not provide compare-and-swap for the
 `latest` alias. The shared lock uses a temporary object in the existing
 `QUEUE_GCS_BUCKET`; Cloud Run's service account needs object create, read, and
 delete access on that bucket. The rotation script uses the same lock. Keep the
-service at one instance with one concurrent request while this refresh path is enabled:
+service at **one instance**; concurrent requests inside it are safe because the
+process-level lock serializes refreshes:
 
 ```sh
 gcloud run services update unified-mcp \
   --project=socialmcps --region=europe-west1 \
-  --max-instances=1 --concurrency=1
+  --max-instances=1 --concurrency=80
 ```
 
-This is a deployment requirement, not applied by this code change. Keep the shared lock enabled if the service later needs multiple instances.
+Do not use `--concurrency=1`: editorial publishing makes the server fetch its own
+`/editorial-asset/` URL while the publish request is still running, and MCP
+clients may keep connections open, so a single slot returns 429 "no available
+instance" (seen by clients as connection timeouts). Keep the shared lock enabled
+if the service later needs multiple instances.
 
 ## Rotation and recovery behavior
 

@@ -10,7 +10,7 @@ from PIL import Image
 
 from clients.gcs_queue_client import QueueConflictError
 from core import editorial as flow
-from core.temp_image_tokens import mint
+from core.temp_image_tokens import mint, verify
 from tools.gcs_temp_storage_tools import _pick_estuary_url
 
 MAX_BYTES = 12 * 1024 * 1024
@@ -89,13 +89,37 @@ class EditorialService:
         return await self.queue.transition(news_id, expected_version,
                                            lambda item: flow.begin(item, payloads, actor))
 
+    async def _download_bound_image(self, source_url):
+        parsed = urlsplit(source_url)
+        base = urlsplit(self.base_url)
+        if (base.scheme == parsed.scheme == "https" and parsed.netloc == base.netloc
+                and not parsed.username and not parsed.password
+                and parsed.path.startswith("/temp-image/")):
+            flow.check(not parsed.query and not parsed.fragment, "URL temporal incorrecta.")
+            token = parsed.path.removeprefix("/temp-image/")
+            object_name = verify(token)
+            flow.check(object_name.startswith("tmp/") and not object_name.startswith("tmp/_chunks/"),
+                       "Activo temporal incorrecto.")
+            client = self.context.get("gcs_temp_storage")
+            flow.check(client is not None, "Almacenamiento temporal no configurado.")
+            data, _ = await client.download_temp_image(object_name)
+            flow.check(len(data) <= MAX_BYTES, "Imagen demasiado grande.")
+            with Image.open(io.BytesIO(data)) as image:
+                flow.check(image.format in ("JPEG", "PNG", "WEBP")
+                           and image.width * image.height <= 25_000_000,
+                           "Formato/dimensiones no admitidos.")
+                mime = Image.MIME[image.format]
+                image.verify()
+            return data, mime
+        return await download_image(source_url)
+
     async def bind(self, news_id, expected_version, generation_id, source_url, actor):
         # Check identity before making any download/storage side effect.
         item = await self.queue.get_item(news_id)
         flow.active(item)
         flow.check(item["version"] == expected_version, "Versión obsoleta.")
         flow.check(item.get("editorial", {}).get("generation_id") == generation_id, "Generación incorrecta.")
-        data, mime = await download_image(source_url)
+        data, mime = await self._download_bound_image(source_url)
         asset = await self.queue.store_asset(news_id, data, mime, source_url)
         return await self.queue.transition(news_id, expected_version,
                                            lambda item: flow.bind(item, generation_id, asset, actor))

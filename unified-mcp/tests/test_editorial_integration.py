@@ -323,3 +323,41 @@ def test_local_or_untrusted_source_rejected_without_request():
             with pytest.raises(flow.EditorialError):
                 await download_image(url)
     asyncio.run(scenario())
+
+def test_bind_own_temp_image_to_news(queue, monkeypatch):
+    from core.temp_image_tokens import mint
+    import time
+    monkeypatch.setenv('MCP_AUTH_TOKEN', 'test-key')
+    async def scenario():
+        item = await queue.create_item('local-image', 1, '2026-10-27', 'OpenAI Google Cloud', None, 'editor')
+        buf = io.BytesIO()
+        Image.new('RGB', (8, 8), 'blue').save(buf, 'JPEG')
+        temp = AsyncMock()
+        temp.download_temp_image.return_value = (buf.getvalue(), 'image/jpeg')
+        service = EditorialService(queue, {'gcs_temp_storage': temp}, 'https://test.example')
+        item = await service.prepare(item['id'], item['version'], {'facebook': {'text': 'OpenAI Google Cloud'}}, 'editor')
+        url = 'https://test.example/temp-image/' + mint('tmp/local.jpg', int(time.time()) + 600)
+        bound = await service.bind(item['id'], item['version'], item['editorial']['generation_id'], url, 'editor')
+        temp.download_temp_image.assert_awaited_once_with('tmp/local.jpg')
+        assert bound['editorial']['image']['sha256'] == flow.hashlib.sha256(buf.getvalue()).hexdigest()
+        assert bound['editorial']['approval'] is None
+    asyncio.run(scenario())
+
+@pytest.mark.parametrize('kind', ['expired', 'tampered', 'chunks', 'other-origin', 'query', 'not-image'])
+def test_temp_image_binding_rejects_invalid_sources(monkeypatch, kind):
+    from core.temp_image_tokens import mint
+    import time
+    monkeypatch.setenv('MCP_AUTH_TOKEN', 'test-key')
+    async def scenario():
+        temp = AsyncMock()
+        temp.download_temp_image.return_value = (b'not an image', 'image/jpeg')
+        service = EditorialService(None, {'gcs_temp_storage': temp}, 'https://test.example')
+        name = 'tmp/_chunks/upload/000000' if kind == 'chunks' else 'tmp/local.jpg'
+        token = mint(name, int(time.time()) + (-10 if kind == 'expired' else 600))
+        if kind == 'tampered': token = token.split('.')[0] + '.invalid'
+        origin = 'https://evil.example' if kind == 'other-origin' else 'https://test.example'
+        url = origin + '/temp-image/' + token + ('?x=1' if kind == 'query' else '')
+        with pytest.raises(Exception):
+            await service._download_bound_image(url)
+        if kind != 'not-image': temp.download_temp_image.assert_not_awaited()
+    asyncio.run(scenario())

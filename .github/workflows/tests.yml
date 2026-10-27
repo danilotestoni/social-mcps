@@ -29,7 +29,9 @@ jobs:
 
       - name: Test mobile chunk uploader
         working-directory: unified-mcp
-        run: node tests/test_chunk_upload.cjs web/chunk-upload.html
+        run: |
+          node tests/test_chunk_upload.cjs web/chunk-upload.html
+          node tests/test_copy_link.cjs web/chunk-upload.html
 
       - name: Run tests
         working-directory: unified-mcp

@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Subir imagen por fragmentos</title>
-<style>body{font:16px system-ui;margin:0;padding:20px;color:#172b3a;background:#f6f8fa}main{max-width:560px;margin:auto}button,input{font:inherit;max-width:100%;margin:10px 0}button{padding:12px 20px;border:0;border-radius:8px;background:#146c64;color:white}button:disabled{opacity:.5}progress{width:100%}p{overflow-wrap:anywhere}a{color:#07675d}#error{color:#a12222}</style>
+<style>body{font:16px system-ui;margin:0;padding:20px;color:#172b3a;background:#f6f8fa}main{max-width:560px;margin:auto}button,input{font:inherit;max-width:100%;margin:10px 0}button{padding:12px 20px;border:0;border-radius:8px;background:#146c64;color:white}button:disabled{opacity:.5}progress{width:100%}p{overflow-wrap:anywhere}textarea{box-sizing:border-box;width:100%;min-height:110px;resize:vertical;font:13px monospace;white-space:pre-wrap;overflow-wrap:anywhere}#result{min-width:0}a{color:#07675d}#error{color:#a12222}</style>
 <main><h2>Subir imagen por fragmentos</h2><p>Elige una imagen del móvil. Se enviará en partes de 32 KB y se verificará antes de generar el enlace. Esto no publica noticias.</p>
 <label for="image">Imagen JPEG, PNG o WebP (máximo 12 MB)</label><br><input id="image" type="file" accept="image/jpeg,image/png,image/webp">
 <br><button id="upload" disabled>Subir por fragmentos</button><progress id="progress" value="0" max="1"></progress>
-<p id="status" role="status" aria-live="polite">Conectando con el complemento…</p><p id="error" role="alert"></p><p id="result"></p></main>
+<p id="status" role="status" aria-live="polite">Conectando con el complemento…</p><p id="error" role="alert"></p><div id="result"></div></main>
 <script>
 "use strict";
 const pending = new Map(); let nextId = 0; let connected = false; let staged = null;
@@ -51,20 +51,44 @@ async function uploadFile(file, callTool, onProgress, resume) {
   const url = new URL(completed.public_url || completed.signed_url); if (url.protocol !== "https:") throw new Error("El servidor no devolvió un enlace HTTPS.");
   return completed;
 }
+function showResult(url) {
+  const link = document.createElement("a"); link.href = url; link.textContent = "Abrir imagen subida"; link.target = "_blank"; link.rel = "noopener noreferrer";
+  const label = document.createElement("label"); label.htmlFor = "public-url"; label.textContent = "Enlace público completo";
+  const field = document.createElement("textarea"); field.id = "public-url"; field.readOnly = true; field.value = url; field.rows = 5; field.spellcheck = false;
+  const copy = document.createElement("button"); copy.type = "button"; copy.textContent = "Copiar enlace completo";
+  const notice = document.createElement("p"); notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite");
+  copy.onclick = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(url);
+      notice.textContent = "Enlace completo copiado.";
+    } catch (_) {
+      field.focus(); field.select(); field.setSelectionRange(0, field.value.length);
+      try {
+        if (!document.execCommand("copy")) throw new Error("Manual copy required");
+        notice.textContent = "Enlace completo copiado.";
+      } catch (_) { notice.textContent = "Enlace completo seleccionado. Mantén pulsado y elige Copiar."; }
+    }
+  };
+  result.replaceChildren(link, document.createElement("br"), label, field, copy, notice);
+}
 button.onclick = async () => {
   button.disabled = true; input.disabled = true; error.textContent = ""; result.replaceChildren();
   try {
     status.textContent = "Comprobando imagen…";
     const completed = await uploadFile(input.files[0], call, (done,total) => {progress.max = total; progress.value = done; status.textContent = `Fragmentos confirmados: ${done} de ${total}`;}, staged);
     staged = null; status.textContent = `Subida verificada: ${completed.size_bytes} bytes. El enlace caduca en 15 minutos.`;
-    const link = document.createElement("a"); link.href = completed.public_url || completed.signed_url; link.textContent = "Abrir imagen subida"; link.target = "_blank"; link.rel = "noopener noreferrer"; result.append(link, document.createElement("br"), document.createTextNode(link.href));
+    showResult(completed.public_url || completed.signed_url);
     request("ui/update-model-context", {structuredContent:{image_upload:completed}}).catch(() => {});
     button.textContent = "Subir otra vez";
   } catch (e) {error.textContent = e.message; status.textContent = "Subida sin completar. Puedes reintentar desde el último fragmento confirmado."; button.textContent = "Reintentar subida";}
   finally {button.disabled = false; input.disabled = false;}
 };
-request("ui/initialize", {appInfo:{name:"Social-Mcps-Cloud image uploader",version:"1.0.0"},appCapabilities:{},protocolVersion:"2026-01-26"}).then(() => {
+request("ui/initialize", {appInfo:{name:"Social-Mcps-Cloud image uploader",version:"1.0.0"},appCapabilities:{availableDisplayModes:["inline"]},protocolVersion:"2026-01-26"}).then(() => {
   window.parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/initialized",params:{}}, "*");
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(() => window.parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/size-changed",params:{height:document.documentElement.scrollHeight}}, "*")).observe(document.body);
+  }
   connected = true; status.textContent = "Elige la imagen y pulsa Subir por fragmentos."; button.disabled = !input.files.length;
 }).catch(() => {status.textContent = "Este cliente no permite abrir el cargador. Abre el chat en el navegador del móvil y vuelve a pedirlo.";});
 </script></html>

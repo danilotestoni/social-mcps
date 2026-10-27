@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 @pytest.fixture
 def server(monkeypatch):
     monkeypatch.setenv("QUEUE_GCS_BUCKET", "fake-test-bucket")
+    monkeypatch.setenv("GCS_TEMP_BUCKET", "fake-temp-bucket")
     monkeypatch.setenv("ENABLE_FACEBOOK", "true")
     monkeypatch.setenv("ENABLE_IMAGE_GEN", "true")
     for platform in ("LINKEDIN", "INSTAGRAM", "THREADS", "WORDPRESS", "X", "FB_SHARE"):

@@ -361,3 +361,17 @@ def test_temp_image_binding_rejects_invalid_sources(monkeypatch, kind):
             await service._download_bound_image(url)
         if kind != 'not-image': temp.download_temp_image.assert_not_awaited()
     asyncio.run(scenario())
+
+@pytest.mark.parametrize('url', ['https://other.example/image.jpg', 'https://chatgpt.com.evil.example/image.jpg'])
+def test_image_origin_error_lists_allowed_sources_without_fetching(url):
+    async def scenario():
+        service = EditorialService(None, base_url='https://test.example')
+        with patch('tools.editorial_tools.httpx.AsyncClient') as http:
+            with pytest.raises(flow.EditorialError) as error:
+                await service._download_bound_image(url)
+            message = str(error.value)
+            for expected in ('Imagen bloqueada', 'chatgpt.com', 'oaiusercontent.com', 'wordpress.com',
+                             'wp.com', 'subdominios', 'https://test.example/temp-image/', 'firmados', 'adjunta'):
+                assert expected in message
+            http.assert_not_called()
+    asyncio.run(scenario())

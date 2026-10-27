@@ -33,16 +33,23 @@ async def guard_generic(queue, non_editorial, text, image_url=None):
                        "Activo editorial: usa editorial_publish.")
 
 
-async def download_image(url):
+async def download_image(url, temp_base_url=""):
     # Deliberately narrow: no internal URLs, credentials, arbitrary redirects or local files.
     allowed = ("chatgpt.com", "oaiusercontent.com", "wordpress.com", "wp.com")
+    origin_error = (
+        "Imagen bloqueada: origen no permitido o URL no segura. "
+        "Solo se permiten imágenes mediante HTTPS de " + ", ".join(allowed) + " (incluidos sus subdominios)"
+    )
+    if temp_base_url:
+        origin_error += "; también enlaces temporales firmados de " + temp_base_url.rstrip("/") + "/temp-image/"
+    origin_error += ". Si la imagen procede de otra web, descárgala y adjunta el archivo para subirlo al almacenamiento temporal."
     for _ in range(6):
         parsed = urlsplit(url)
         host = parsed.hostname or ""
         flow.check(parsed.scheme == "https" and not parsed.username and not parsed.password
                    and parsed.port in (None, 443)
                    and any(host == d or host.endswith("." + d) for d in allowed),
-                   "Origen no permitido. Usa ChatGPT Share o un activo HTTPS de WordPress/OpenAI.")
+                   origin_error)
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
             async with client.stream("GET", url) as response:
                 if response.is_redirect:
@@ -111,7 +118,7 @@ class EditorialService:
                 mime = Image.MIME[image.format]
                 image.verify()
             return data, mime
-        return await download_image(source_url)
+        return await download_image(source_url, temp_base_url=self.base_url)
 
     async def bind(self, news_id, expected_version, generation_id, source_url, actor):
         # Check identity before making any download/storage side effect.

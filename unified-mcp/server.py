@@ -696,16 +696,16 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         return await gcs_tmp.delete_temp_image(lc["gcs_temp_storage"], object_name)
 
     @mcp.resource(
-        "ui://social-mcps/chunk-upload-v1.html",
+        "ui://social-mcps/chunk-upload-v2.html",
         mime_type="text/html;profile=mcp-app",
-        meta={"ui": {"prefersBorder": True, "csp": {"connectDomains": [], "resourceDomains": []}}},
+        meta={"ui": {"prefersBorder": True, "permissions": {"clipboardWrite": {}}, "csp": {"connectDomains": [], "resourceDomains": []}}},
     )
     def chunk_upload_component() -> str:
         return (Path(__file__).parent / "web" / "chunk-upload.html").read_text(encoding="utf-8")
 
     @mcp.tool(meta={
-        "ui": {"resourceUri": "ui://social-mcps/chunk-upload-v1.html"},
-        "openai/outputTemplate": "ui://social-mcps/chunk-upload-v1.html",
+        "ui": {"resourceUri": "ui://social-mcps/chunk-upload-v2.html"},
+        "openai/outputTemplate": "ui://social-mcps/chunk-upload-v2.html",
     })
     async def open_chunked_image_upload() -> dict:
         """Open the mobile image picker and upload UI. Use for Android/mobile images

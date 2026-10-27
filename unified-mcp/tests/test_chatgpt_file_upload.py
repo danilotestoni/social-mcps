@@ -75,3 +75,17 @@ def test_file_schema_matches_host_contract():
     assert set(schema['properties'])=={'download_url','file_id','mime_type','file_name'}
     assert schema['properties']['mime_type']['type']=='string'
     assert schema['properties']['file_name']['type']=='string'
+
+def test_rejected_attachment_reports_safe_source_category():
+    cases = [
+        ('/mnt/data/image.png', 'referencia local'),
+        ('https://storage.example/image.png?sig=private', 'storage.example'),
+    ]
+    for url, expected in cases:
+        def no_request(req):
+            pytest.fail('Rejected source was requested')
+        result, client = run_upload(no_request, url)
+        assert result['success'] is False
+        assert expected in result['error']
+        assert 'private' not in result['error'] and 'sig=' not in result['error']
+        client.upload_temp_image.assert_not_awaited()

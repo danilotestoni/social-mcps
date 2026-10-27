@@ -26,10 +26,15 @@ class ChatGPTFile(BaseModel):
 def _validate_url(url: str) -> None:
     parsed = urlsplit(url)
     host = parsed.hostname or ''
-    if (parsed.scheme != 'https' or parsed.username or parsed.password
-            or parsed.port not in (None, 443)
-            or not any(host == domain or host.endswith('.' + domain) for domain in _ALLOWED_HOSTS)):
-        raise ValueError('Adjunto no válido: ChatGPT debe proporcionar su enlace HTTPS de descarga; no una ruta local ni un identificador como URL.')
+    if parsed.scheme != 'https':
+        raise ValueError('Adjunto no válido: se recibió una referencia local o un protocolo no HTTPS. ChatGPT debe proporcionar un enlace HTTPS de descarga.')
+    if parsed.username or parsed.password or parsed.port not in (None, 443):
+        raise ValueError('Adjunto no válido: el enlace contiene credenciales o un puerto no admitido.')
+    if not any(host == domain or host.endswith('.' + domain) for domain in _ALLOWED_HOSTS):
+        # Report only the hostname: never echo the signed path, query or file ID.
+        safe_host = host.encode('ascii', errors='backslashreplace').decode('ascii')[:253]
+        raise ValueError('Adjunto no válido: se recibió un enlace HTTPS, pero su servidor de descarga no está admitido: ' + safe_host + '.')
+
 
 
 async def _download_file(url: str) -> tuple[bytes, str]:

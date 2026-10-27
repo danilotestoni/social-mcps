@@ -21,10 +21,20 @@ Ningún agente publica noticias sin autorización explícita del usuario.
 4. Generación nativa de ChatGPT: usa ese prompt, muestra el resultado y solicita
    el enlace compartido de ESA generación. `editorial_bind_image(news_id,
    expected_version, generation_id, source_url, actor)` descarga, decodifica y
-   almacena bytes inmutables. Solo admite HTTPS OpenAI/ChatGPT/WordPress; URLs
+   almacena bytes inmutables. Admite HTTPS OpenAI/ChatGPT/WordPress y enlaces
+   temporales firmados del propio servicio; URLs
    inaccesibles, HTML sin imagen y redirecciones ajenas se rechazan.
    Para Claude/Codex sin generador nativo: `generate_image(prompt=visual_prompt,
    news_id, generation_id, upload_to_wordpress=false)` genera y vincula en servidor.
+   Si el usuario aporta una imagen adjunta, usa `upload_chat_image(file=...)`:
+   el host ChatGPT entrega el objeto de archivo con `download_url` y `file_id`
+   mediante `openai/fileParams`. No inventes ese objeto ni uses rutas `/mnt/data`,
+   referencias `sandbox:` o IDs como `image_url`. La herramienta valida y conserva
+   los bytes originales, devuelve URL temporal y SHA-256 y no modifica la noticia.
+   Vincula después su `public_url` con `editorial_bind_image` a la generación
+   preparada. No regeneres ni sustituyas una imagen aportada por el usuario.
+   Si el catálogo aún no muestra `upload_chat_image`, actualiza las herramientas
+   del complemento y repite; no des por probada una transferencia no ejecutada.
    No se debe llamar a `upload_temp_image` como sustituto de la vinculación.
 5. `editorial_request_review(news_id)` devuelve un enlace de 30 minutos a una página
    adaptada a móvil (también usable en web/app, modo claro y oscuro). El **usuario**

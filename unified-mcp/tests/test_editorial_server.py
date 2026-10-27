@@ -103,3 +103,17 @@ def test_generation_without_news_binding_stops(server, monkeypatch):
         assert (await server.generate_image("Claude"))["success"] is False
         generator.assert_not_awaited()
     asyncio.run(scenario())
+
+def test_native_attachment_tool_descriptor(server):
+    async def scenario():
+        tools = {t.name: t for t in await server.mcp.list_tools()}
+        tool = tools['upload_chat_image']
+        assert tool.meta['openai/fileParams'] == ['file']
+        schema = tool.inputSchema
+        file = schema['properties']['file']
+        if '$ref' in file:
+            file = schema['$defs'][file['$ref'].split('/')[-1]]
+        assert set(file['properties']) == {'download_url', 'file_id', 'mime_type', 'file_name'}
+        assert set(file['required']) == {'download_url', 'file_id'}
+        assert 'file' in schema['required']
+    asyncio.run(scenario())

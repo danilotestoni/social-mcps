@@ -604,6 +604,22 @@ if _ENABLED["IMAGE_GEN"]:
 if _ENABLED["GCS_TEMP_STORAGE"]:
     import tools.gcs_temp_storage_tools as gcs_tmp
 
+    from tools.chatgpt_file_tools import ChatGPTFile, upload_chat_image as import_chat_image
+
+    @mcp.tool(meta={"openai/fileParams": ["file"]})
+    async def upload_chat_image(file: ChatGPTFile, ttl_seconds: int = 900) -> dict:
+        """Upload an image attached in this ChatGPT conversation to temporary storage.
+        PREFERRED for user attachments: ChatGPT supplies the file object and its download URL
+        through native file handling. Never invent a download URL or pass a local path.
+        Transfers original bytes server-side, without base64/chunk tool calls.
+        Returns public_url, object_name, mime_type, size_bytes, expires_at and sha256.
+        Does not modify news, approve, or publish. For queue news, use the returned URL
+        with editorial_bind_image in the protected editorial flow.
+        """
+        ctx = mcp.get_context()
+        lc = ctx.request_context.lifespan_context
+        return await import_chat_image(lc["gcs_temp_storage"], file, ttl_seconds)
+
     @mcp.tool()
     async def upload_temp_image(
         image_base64: str | None = None,
@@ -620,6 +636,8 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         URL usable as image_url for Instagram, Threads, or any other
         publishing tool that requires a public URL rather than a local
         file.
+        For images attached in ChatGPT, prefer upload_chat_image with its native file input.
+        Never use /mnt/data paths, sandbox: references or file IDs as image_url.
         Provide exactly ONE of:
           - image_url: a URL the server fetches directly. STRONGLY
             PREFERRED whenever the image is already reachable at a URL —

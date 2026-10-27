@@ -11,6 +11,12 @@ La cola compartida es la fuente de verdad; la memoria conversacional no puede su
 
 Para una noticia de la cola, seguir `editorial_resolve` → `editorial_prepare` → generación nativa desde `visual_prompt` → `editorial_bind_image` con la URL compartida y el `generation_id` pendiente → `editorial_request_review` → aprobación humana en el navegador → `editorial_publish` por canal. No utilizar los pasos genéricos descritos más abajo para noticias de cola.
 
+Para una imagen adjunta del usuario, `upload_chat_image(file=...)` recibe el archivo
+mediante el contrato nativo `openai/fileParams`; usa su `public_url` en
+`editorial_bind_image` para la generación preparada. No pases rutas locales,
+referencias `sandbox:` ni IDs como `image_url`, ni generes otra imagen para sustituirla.
+La subida temporal no sustituye la vinculación, revisión ni aprobación humanas.
+
 La URL ChatGPT se conserva como origen del activo inmutable. No usar `upload_temp_image`, `wordpress_publish_post` ni otras herramientas genéricas como ruta editorial. WordPress primero; solo el servidor sustituye `[WORDPRESS_URL]` por su URL confirmada. Threads y X siguen siendo solo texto, pero también requieren aprobación editorial. Si la imagen no puede verificarse, se bloquean todos los canales editoriales.
 
 Las secciones siguientes conservan el procedimiento técnico histórico exclusivamente para publicaciones ajenas a la cola, declaradas con `non_editorial=true`. Para cualquier conflicto en noticias de cola prevalece el runbook anterior. Nunca rellenar el formulario humano en nombre del usuario.

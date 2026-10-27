@@ -651,3 +651,30 @@ class ChunkedUploadToolTests(TestCase):
         self.assertTrue(result["success"])
         self.assertLess(len(captured["data"]), len(large_png))
         self.assertEqual(captured["mime_type"], "image/jpeg")
+
+
+class ChunkIntegrityTests(TestCase):
+    _make_fake_client = ChunkedUploadToolTests._make_fake_client
+
+    def test_wrong_hash_keeps_chunks_and_never_stores_final_image(self):
+        client, chunks, _ = self._make_fake_client()
+        chunks[("upload-abc", 0)] = b"original"
+        result = asyncio.run(gcs_tools.finish_temp_image_upload(
+            client, "upload-abc", 1, auto_optimize=False, expected_sha256="0" * 64))
+        self.assertFalse(result["success"])
+        self.assertIn("SHA-256", result["error"])
+        client.upload_temp_image.assert_not_called()
+        client.cleanup_chunks.assert_not_called()
+        self.assertTrue(chunks)
+
+    def test_matching_hash_returns_verified_original_and_stored_hash(self):
+        import hashlib
+        client, chunks, _ = self._make_fake_client()
+        chunks[("upload-abc", 0)] = b"original"
+        digest = hashlib.sha256(b"original").hexdigest()
+        result = asyncio.run(gcs_tools.finish_temp_image_upload(
+            client, "upload-abc", 1, auto_optimize=False, expected_sha256=digest))
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["sha256"], digest)
+        self.assertEqual(result["data"]["original_sha256"], digest)
+        self.assertFalse(chunks)

@@ -154,3 +154,17 @@ Verificar tráfico, conectividad y lectura MCP de nuevo. El rollback de código 
 borra datos ni deshace publicaciones. La revisión antigua no impone el protocolo:
 pausar el flujo editorial hasta restaurar una revisión protegida. No editar GCS
 manualmente para eliminar reservas o aparentar aprobaciones.
+
+
+## Android: subida directa por fragmentos
+
+Pedir `open_chunked_image_upload` para abrir el selector dentro del chat.
+Elegir de nuevo la imagen del móvil en ese componente y pulsar **Subir por fragmentos**.
+El selector necesita una elección explícita; no puede leer por su cuenta un adjunto anterior.
+JavaScript llama al inicio, envía partes de 32768 bytes y finaliza con `expected_sha256`
+y `auto_optimize=false`. El servidor rechaza una reconstrucción distinta antes de almacenar
+el objeto final; el componente compara el hash y el tamaño devueltos y muestra el enlace HTTPS.
+Un corte conserva el identificador y el último fragmento confirmado mientras el componente
+siga abierto: **Reintentar subida** reenvía desde ese punto. No publica ni modifica noticias.
+Al desplegar, actualizar herramientas de la conexión y abrir un chat nuevo.
+Las pruebas locales del componente no sustituyen la prueba en el cliente Android real.

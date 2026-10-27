@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import io
 import json
 import re
@@ -295,17 +297,27 @@ async def finish_temp_image_upload(
     filename: str | None = None,
     ttl_seconds: int = 900,
     auto_optimize: bool = True,
+    expected_sha256: str | None = None,
 ) -> dict:
     try:
+        if expected_sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
+            raise ValueError("expected_sha256 must be a SHA-256 hexadecimal digest.")
         data = await client.assemble_chunks(upload_id, total_chunks)
+        original_sha256 = hashlib.sha256(data).hexdigest()
+        if expected_sha256 is not None and not hmac.compare_digest(original_sha256, expected_sha256.lower()):
+            raise ValueError("SHA-256 mismatch: reconstructed image differs from the original. Staged chunks retained for retry.")
         resolved_mime_type = mime_type
         if auto_optimize:
             data, resolved_mime_type = _maybe_optimize(data, resolved_mime_type)
         result = await client.upload_temp_image(
             data, resolved_mime_type, filename=filename, ttl_seconds=ttl_seconds
         )
+        result["original_sha256"] = original_sha256
+        result["sha256"] = hashlib.sha256(data).hexdigest()
         await client.cleanup_chunks(upload_id, total_chunks)
         return ToolResult(success=True, data=result).model_dump()
+    except ValueError as exc:
+        return ToolResult(success=False, error=describe_exception(exc)).model_dump()
     except GCSTempStorageError as exc:
         return ToolResult(success=False, error=describe_exception(exc)).model_dump()
     except Exception as exc:

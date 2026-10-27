@@ -118,3 +118,19 @@ def test_native_attachment_tool_descriptor(server):
         assert set(file['required']) == {'download_url', 'file_id'}
         assert 'file' in schema['required']
     asyncio.run(scenario())
+
+
+def test_mobile_chunk_uploader_resource_and_tool_access(server):
+    async def scenario():
+        tools = {t.name: t for t in await server.mcp.list_tools()}
+        uri = tools["open_chunked_image_upload"].meta["ui"]["resourceUri"]
+        for name in ("start_temp_image_upload", "upload_temp_image_chunk", "finish_temp_image_upload"):
+            assert "app" in tools[name].meta["ui"]["visibility"]
+        assert "expected_sha256" in tools["finish_temp_image_upload"].inputSchema["properties"]
+        contents = await server.mcp.read_resource(uri)
+        resource = list(contents)[0]
+        assert resource.mime_type == "text/html;profile=mcp-app"
+        assert "uploadFile" in resource.content
+        assert "ui/initialize" in resource.content
+        assert "<input" in resource.content
+    asyncio.run(scenario())

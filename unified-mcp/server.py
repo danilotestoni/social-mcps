@@ -695,7 +695,28 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         lc = ctx.request_context.lifespan_context
         return await gcs_tmp.delete_temp_image(lc["gcs_temp_storage"], object_name)
 
-    @mcp.tool()
+    @mcp.resource(
+        "ui://social-mcps/chunk-upload-v1.html",
+        mime_type="text/html;profile=mcp-app",
+        meta={"ui": {"prefersBorder": True, "csp": {"connectDomains": [], "resourceDomains": []}}},
+    )
+    def chunk_upload_component() -> str:
+        return (Path(__file__).parent / "web" / "chunk-upload.html").read_text(encoding="utf-8")
+
+    @mcp.tool(meta={
+        "ui": {"resourceUri": "ui://social-mcps/chunk-upload-v1.html"},
+        "openai/outputTemplate": "ui://social-mcps/chunk-upload-v1.html",
+    })
+    async def open_chunked_image_upload() -> dict:
+        """Open the mobile image picker and upload UI. Use for Android/mobile images
+        when the user wants chunked upload. The user selects the image in this
+        component; JavaScript sends 32 KiB chunks directly through MCP and verifies
+        SHA-256 before returning a temporary public URL. No news changes or publication.
+        Do not transcribe base64 blocks through the model or pass local file paths.
+        """
+        return {"success": True, "data": {"chunk_size": 32768, "max_bytes": 12582912}}
+
+    @mcp.tool(meta={"ui": {"visibility": ["model", "app"]}, "openai/widgetAccessible": True})
     async def start_temp_image_upload() -> dict:
         """
         Starts a CHUNKED upload for an image, for the case where the file
@@ -719,7 +740,7 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         lc = ctx.request_context.lifespan_context
         return await gcs_tmp.start_temp_image_upload(lc["gcs_temp_storage"])
 
-    @mcp.tool()
+    @mcp.tool(meta={"ui": {"visibility": ["model", "app"]}, "openai/widgetAccessible": True})
     async def upload_temp_image_chunk(
         upload_id: str,
         chunk_index: int,
@@ -739,7 +760,7 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
             lc["gcs_temp_storage"], upload_id, chunk_index, chunk_base64
         )
 
-    @mcp.tool()
+    @mcp.tool(meta={"ui": {"visibility": ["model", "app"]}, "openai/widgetAccessible": True})
     async def finish_temp_image_upload(
         upload_id: str,
         total_chunks: int,
@@ -747,6 +768,7 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
         filename: str | None = None,
         ttl_seconds: int = 900,
         auto_optimize: bool = True,
+        expected_sha256: str | None = None,
     ) -> dict:
         """
         Assembles all chunks uploaded via upload_temp_image_chunk (indices
@@ -768,6 +790,7 @@ if _ENABLED["GCS_TEMP_STORAGE"]:
             filename,
             ttl_seconds,
             auto_optimize,
+            expected_sha256,
         )
 
 

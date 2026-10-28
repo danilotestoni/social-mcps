@@ -851,6 +851,10 @@ if _ENABLED["QUEUE"]:
                   {"channel": "x", "outcome": "absent"}]. Optional per entry: external_id, evidence.
         outcome "published" needs the public https URL (the ID is derived from it when possible) and also
         covers channels published outside the server (e.g. X from the user's machine).
+        For an explicit human confirmation without a link use outcome "published_manual", with required
+        confirmed_by (human name) and evidence (their explicit statement). URL and external_id are optional;
+        never invent them. This records manual publication, user verification, confirmer, recorder and time.
+        Do not use published_manual based only on an agent assumption or a failed platform call.
         outcome "absent" releases an uncertain attempt so it can be retried.
         Use only with the user's explicit statement in chat or after verifying the platform with read tools;
         never infer absence from a timeout. Content approval still requires the user's review link.

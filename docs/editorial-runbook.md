@@ -73,7 +73,7 @@ no afirman evaluar reconocimiento de imágenes. El usuario puede equivocarse.
 ## Idempotencia y reconciliación
 
 Clave por ID/revisión/canal; reserva CAS antes de llamar a la API. Solo un agente
-gana una reserva. Una respuesta positiva sin ID externo es incierta. Los resultados
+gana una reserva. Una respuesta positiva de una API sin ID externo es incierta. Los resultados
 confirmados guardan ID, URL cuando la API la proporciona, fecha y respuesta.
 Una API que confirma ID pero no devuelve permalink conserva `url=null`; no se
 inventa una URL. WordPress requiere además estado `publish`.
@@ -89,7 +89,7 @@ Para resolver hay dos vías equivalentes, ambas multicanal:
 
 - `editorial_reconcile(news_id, results, actor)` desde el chat, cuando el usuario
   indica el resultado o un agente lo verificó con herramientas de lectura de la
-  plataforma. `results` es una lista: `{"channel", "outcome": "published"|"absent",
+  plataforma. `results` es una lista: `{"channel", "outcome": "published"|"published_manual"|"absent",
   "url"?, "external_id"?, "evidence"?}`. No requiere formulario.
 - La sección «Conciliar canales» de la página de revisión, que permite marcar
   varios canales en un solo envío.
@@ -99,6 +99,25 @@ Reglas comunes:
 - Publicado: basta la URL https; el ID se deduce de ella cuando es posible (X,
   Threads, LinkedIn). Sirve también para canales publicados fuera del servidor
   (por ejemplo X desde el equipo local), aunque no haya intento previo.
+- Publicación manual confirmada por el usuario: `outcome="published_manual"`,
+  `confirmed_by` (nombre de la persona) y `evidence` (su confirmación expresa)
+  son obligatorios. URL e ID externo son opcionales; sin ellos se guardan como
+  `null`, nunca se inventan. Solo se aplica a los canales indicados y preparados.
+  El canal guarda `publication_method="manual"`, `verification="user_confirmation"`,
+  persona que confirma, agente que registra, fecha y evidencia. El recibo conserva
+  el intento anterior, si existía. Esta confirmación no equivale a verificación
+  directa en la plataforma y no ejecuta ninguna publicación.
+  No usar esta opción por una suposición del agente ni por un timeout.
+  Ejemplo desde el chat:
+  ```json
+  {"news_id":"2026-10-19-noticia-3","actor":"codex","results":[
+    {"channel":"threads","outcome":"published_manual","confirmed_by":"Danilo",
+     "evidence":"El usuario confirma expresamente que publicó esta noticia a mano en Threads."}
+  ]}
+  ```
+  En el formulario, seleccionar «Lo publiqué manualmente» e indicar nombre y
+  confirmación; el enlace es opcional. Los canales cerrados se muestran como
+  «Publicado manualmente» y no se vuelven a seleccionar para publicar.
 - No publicado: libera el intento incierto, conserva el recibo y permite un nuevo
   intento explícito. Un timeout por sí solo no demuestra ausencia.
 - Cuando todos los canales aprobados quedan confirmados, la noticia pasa a

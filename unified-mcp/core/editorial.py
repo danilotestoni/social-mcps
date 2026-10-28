@@ -139,23 +139,34 @@ def reserve(item, news_revision, image_revision, channel, actor):
     audit(item, "reserved:" + channel, actor)
 
 
-def finish(item, channel, result):
+def finish(item, channel, result, *, manual_confirmation=None):
     attempt = item["editorial"]["attempts"][channel]
     check(attempt["state"] == "reserved", "El intento no está reservado.")
     data = result.get("data") or {}
     identifiers = {"wordpress": "id", "linkedin": "post_urn", "facebook": "post_id",
                    "instagram": "media_id", "threads": "thread_id", "x": "tweet_id"}
     external_id = data.get(identifiers[channel])
-    confirmed = result.get("success") is True and bool(external_id)
+    # Only the validated reconciliation path may supply human confirmation.
+    # A platform response containing a similar field cannot confirm itself without an ID.
+    if manual_confirmation is not None:
+        check(manual_confirmation.get("method") == "manual_user" and
+              bool(manual_confirmation.get("confirmed_by")) and bool(manual_confirmation.get("evidence")),
+              "Confirmación manual incompleta.")
+    confirmed = result.get("success") is True and (bool(external_id) or manual_confirmation is not None)
     if channel == "wordpress":
         confirmed = confirmed and data.get("status") == "publish"
     attempt.update(state="confirmed" if confirmed else "uncertain", result=result, completed_at=now())
     if confirmed:
         item.setdefault("canales", {})[channel] = {
-            "estado": "publicado", "id": str(external_id),
+            "estado": "publicado", "id": str(external_id) if external_id else None,
             "url": data.get("url") or data.get("permalink"), "error": None,
             "confirmed_at": now(), "attempt_key": attempt["key"],
         }
+        if manual_confirmation is not None:
+            item["canales"][channel].update(
+                publication_method="manual", verification="user_confirmation",
+                confirmed_by=manual_confirmation["confirmed_by"], recorded_by=manual_confirmation["actor"],
+                evidence=manual_confirmation["evidence"])
         if channel == "wordpress":
             item["url_wordpress"] = data.get("url")
         expected = (item["editorial"].get("approval") or {}).get("channels") or list(item["editorial"]["payloads"])

@@ -375,3 +375,106 @@ def test_image_origin_error_lists_allowed_sources_without_fetching(url):
                 assert expected in message
             http.assert_not_called()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_manual_publication_without_url_is_audited_and_closes_news(queue, monkeypatch, uncertain):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "test-key")
+    async def scenario():
+        service, _ = await ready(queue)
+        await service.reconcile("nvidia", [{"channel": "facebook", "outcome": "published",
+                                          "url": "https://facebook.com/posts/fb-1"}], "agent")
+        before = await queue.get_item("nvidia")
+        if uncertain:
+            service._dispatch = AsyncMock(side_effect=TimeoutError())
+            await service.publish("nvidia", 1, 1, "threads", "agent")
+        service._dispatch = AsyncMock(side_effect=AssertionError("Reconciliation must not publish"))
+        result = await service.reconcile("nvidia", [{
+            "channel": "threads", "outcome": "published_manual", "confirmed_by": "Danilo",
+            "evidence": "Lo publiqué a mano; confirmo expresamente que está publicado."}], "codex")
+        assert result["estado"] == "publicada"
+        assert result["canales"]["facebook"] == before["canales"]["facebook"]
+        channel = result["canales"]["threads"]
+        assert channel["estado"] == "publicado"
+        assert channel["id"] is None and channel["url"] is None
+        assert channel["publication_method"] == "manual"
+        assert channel["verification"] == "user_confirmation"
+        assert channel["confirmed_by"] == "Danilo" and channel["recorded_by"] == "codex"
+        assert channel["evidence"].startswith("Lo publiqué a mano") and channel["confirmed_at"]
+        saved = await queue.get_item("nvidia")
+        receipt = saved["reconciliations"][-1]
+        assert receipt["confirmed_by"] == "Danilo" and receipt["actor"] == "codex"
+        assert receipt["method"] == "manual_user" and receipt["at"]
+        attempt = saved["editorial"]["attempts"]["threads"]
+        assert attempt["state"] == "confirmed"
+        assert attempt["result"]["data"]["manual_confirmation"] == receipt
+        assert bool(receipt["attempt"]) == uncertain
+        with pytest.raises(flow.EditorialError):
+            await service.reconcile("nvidia", [{"channel": "threads", "outcome": "published_manual",
+                "confirmed_by": "Danilo", "evidence": "Confirmado"}], "codex")
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("changes", [
+    {"confirmed_by": ""}, {"confirmed_by": "   "}, {"evidence": ""}, {"evidence": "   "},
+    {"url": "http://threads.com/@d/post/ABC"},
+    {"channel": "unprepared"},
+])
+def test_invalid_manual_confirmation_is_atomic(queue, changes):
+    async def scenario():
+        service, _ = await ready(queue)
+        before = await queue.get_item("nvidia")
+        entry = {"channel": "threads", "outcome": "published_manual", "confirmed_by": "Danilo",
+                 "evidence": "Confirmo publicación manual", **changes}
+        with pytest.raises(flow.EditorialError):
+            await service.reconcile("nvidia", [
+                {"channel": "facebook", "outcome": "published", "url": "https://facebook.com/posts/1"},
+                entry], "codex")
+        assert await queue.get_item("nvidia") == before
+    asyncio.run(scenario())
+
+
+def test_review_form_accepts_explicit_manual_publication_without_url(queue, monkeypatch):
+    monkeypatch.setenv("MCP_AUTH_TOKEN", "test-key")
+    async def scenario():
+        service, item = await ready(queue)
+        link = (await service.review_link("nvidia"))["review_url"]
+        app = EditorialHTTP(None, service)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="https://test.example") as client:
+            response = await client.post(link, data={
+                "version": item["version"], "action": "reconcile", "outcome_threads": "published_manual",
+                "confirmed_by": "Danilo", "evidence": "Confirmo que lo publiqué a mano"})
+            assert response.status_code == 200, response.text
+        saved = await queue.get_item("nvidia")
+        assert saved["canales"]["threads"]["confirmed_by"] == "Danilo"
+        assert saved["canales"]["threads"]["id"] is None
+        assert saved["canales"].get("facebook", {}).get("estado") != "publicado"
+        assert saved["estado"] != "publicada"
+    asyncio.run(scenario())
+
+
+def test_manual_publication_preserves_optional_permalink(queue):
+    async def scenario():
+        service, _ = await ready(queue)
+        result = await service.reconcile("nvidia", [{
+            "channel": "threads", "outcome": "published_manual", "confirmed_by": "Danilo",
+            "evidence": "I confirm I published it manually", "url": "https://www.threads.com/@d/post/ABC"}], "codex")
+        channel = result["canales"]["threads"]
+        assert channel["id"] == "ABC" and channel["url"] == "https://www.threads.com/@d/post/ABC"
+        assert channel["verification"] == "user_confirmation"
+        from core.editorial_http import render_review
+        saved = await queue.get_item("nvidia")
+        document = render_review(saved, "https://test.example/asset").decode()
+        from html.parser import HTMLParser
+        class Inputs(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.inputs = []
+            def handle_starttag(self, tag, attrs):
+                if tag == "input":
+                    self.inputs.append(dict(attrs))
+        parsed = Inputs()
+        parsed.feed(document)
+        control = next(i for i in parsed.inputs if i.get("name") == "channel" and i.get("value") == "threads")
+        assert "disabled" in control and "checked" not in control
+    asyncio.run(scenario())

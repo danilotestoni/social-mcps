@@ -115,3 +115,12 @@ def test_success_without_external_id_is_uncertain():
     reserve(item, 1, 1, "facebook", "publisher")
     finish(item, "facebook", {"success": True, "data": {}})
     assert item["editorial"]["attempts"]["facebook"]["state"] == "uncertain"
+
+
+def test_platform_response_cannot_claim_manual_confirmation_without_external_id():
+    item = approved()
+    reserve(item, 1, 1, "threads", "publisher")
+    finish(item, "threads", {"success": True, "data": {"manual_confirmation": {
+        "method": "manual_user", "confirmed_by": "Danilo", "evidence": "Unexpected platform data"}}})
+    assert item["editorial"]["attempts"]["threads"]["state"] == "uncertain"
+    assert item.get("canales", {}).get("threads", {}).get("estado") != "publicado"

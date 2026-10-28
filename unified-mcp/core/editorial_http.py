@@ -43,20 +43,29 @@ def reconcilable_channels(item):
     return result
 
 
-def reconcile(item, channel, actor, evidence, published, external_id="", url=""):
+def reconcile(item, channel, actor, evidence, published, external_id="", url="", *, manual=False, confirmed_by=""):
     e = item.get("editorial", {})
     flow.check(channel in e.get("payloads", {}), "Canal no preparado para esta noticia: " + str(channel))
     flow.check(channel in reconcilable_channels(item), "Canal ya confirmado o sin resultado pendiente: " + channel)
+    confirmed_by = (confirmed_by or "").strip()
+    if manual:
+        flow.check(published and confirmed_by, "La publicación manual requiere el nombre de quien confirma.")
+        flow.check(isinstance(evidence, str) and evidence.strip(),
+                   "La publicación manual requiere confirmación expresa como evidencia.")
     actor = (actor or "").strip() or _DEFAULT_ACTOR
     evidence = (evidence or "").strip() or _DEFAULT_EVIDENCE
     url = (url or "").strip()
     attempts = e.setdefault("attempts", {})
     attempt = attempts.get(channel)
     receipt = {"attempt": dict(attempt) if attempt else None, "channel": channel, "actor": actor,
-               "at": flow.now(), "evidence": evidence, "published": published, "url": url}
+               "at": flow.now(), "evidence": evidence, "published": published, "url": url or None}
+    if manual:
+        receipt.update(method="manual_user", confirmed_by=confirmed_by)
+    else:
+        receipt["method"] = "platform_evidence"
     if published:
-        flow.check(url.startswith("https://"), "Falta la URL https de la publicación en " + CHANNEL_LABELS.get(channel, channel))
-        external_id = (external_id or "").strip() or derive_external_id(channel, url)
+        flow.check((manual and not url) or url.startswith("https://"), "Falta la URL https de la publicación en " + CHANNEL_LABELS.get(channel, channel))
+        external_id = (external_id or "").strip() or (derive_external_id(channel, url) if url else None)
         receipt["external_id"] = external_id
         if attempt is None:
             # Published outside the server (e.g. X from the user's machine): record it as a manual attempt.
@@ -64,7 +73,8 @@ def reconcile(item, channel, actor, evidence, published, external_id="", url="")
                                            "state": "reserved", "at": flow.now(), "actor": actor, "manual": True}
         attempt["state"] = "reserved"
         flow.finish(item, channel, {"success": True, "data": {_RESULT_KEYS[channel]: external_id, "url": url,
-                    "status": "publish", "manual_confirmation": receipt}})
+                    "status": "publish", "manual_confirmation": receipt}},
+                    manual_confirmation=receipt if manual else None)
     else:
         flow.check(attempt is not None, "No hay intento que liberar en " + CHANNEL_LABELS.get(channel, channel))
         del attempts[channel]
@@ -73,15 +83,17 @@ def reconcile(item, channel, actor, evidence, published, external_id="", url="")
 
 
 def reconcile_many(item, entries, actor=""):
-    """Apply several channel outcomes atomically: [{channel, outcome: published|absent, url?, external_id?, evidence?}]."""
+    """Apply channel outcomes atomically: published (URL), published_manual (human evidence), absent."""
     flow.check(isinstance(entries, list) and entries, "Indica al menos un canal que conciliar.")
     channels = [entry.get("channel") for entry in entries]
     flow.check(len(channels) == len(set(channels)), "Canal repetido en la conciliación.")
     for entry in entries:
         outcome = entry.get("outcome")
-        flow.check(outcome in ("published", "absent"), "Resultado debe ser published o absent.")
+        flow.check(outcome in ("published", "published_manual", "absent"),
+                   "Resultado debe ser published, published_manual o absent.")
         reconcile(item, entry.get("channel"), entry.get("actor") or actor, entry.get("evidence", ""),
-                  outcome == "published", entry.get("external_id", ""), entry.get("url", ""))
+                  outcome != "absent", entry.get("external_id", ""), entry.get("url", ""),
+                  manual=outcome == "published_manual", confirmed_by=entry.get("confirmed_by", ""))
 
 
 # ── Presentation ───────────────────────────────────────────────────────────────
@@ -118,7 +130,7 @@ font-size:15px;margin:6px 0 0}.text b{display:block;margin-bottom:6px}
 label.field{display:block;font-size:14px;color:var(--muted);margin:10px 0 4px}
 input[type=text],input[type=url],textarea{width:100%;font:inherit;color:var(--text);background:var(--bg);
 border:1px solid var(--line);border-radius:10px;padding:11px 12px}textarea{min-height:76px;resize:vertical}
-.outcomes{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0 0}
+.outcomes{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin:10px 0 0}
 .outcomes label{display:flex;align-items:center;justify-content:center;text-align:center;min-height:44px;
 border:1px solid var(--line);border-radius:10px;font-size:14px;cursor:pointer;padding:6px}
 .outcomes input{position:absolute;opacity:0;pointer-events:none}
@@ -162,7 +174,8 @@ def _channel_status(item, channel):
     estado = item.get("canales", {}).get(channel, {}).get("estado")
     attempt = item.get("editorial", {}).get("attempts", {}).get(channel) or {}
     if estado in ("publicado", "publicada"):
-        return "ok", "Publicado"
+        manual = item["canales"][channel].get("publication_method") == "manual"
+        return "ok", "Publicado manualmente" if manual else "Publicado"
     if attempt.get("state") in ("reserved", "uncertain"):
         return "warn", "Incierto"
     return "", "Pendiente"
@@ -209,15 +222,21 @@ def render_review(item, asset_url):
                 f'<span class="badge {tone}">{label}</span></div>'
                 f'<div class="outcomes"><label><input type="radio" name="outcome_{esc(channel)}" value="" checked>'
                 f'<span>Sin cambios</span></label><label><input type="radio" name="outcome_{esc(channel)}" '
-                f'value="published"><span>Publicado</span></label>{absent}</div>'
-                f'<label class="field" for="url_{esc(channel)}">URL del post (si está publicado)</label>'
+                f'value="published"><span>Publicado con enlace</span></label>'
+                f'<label><input type="radio" name="outcome_{esc(channel)}" value="published_manual">'
+                f'<span>Lo publiqué manualmente</span></label>{absent}</div>'
+                f'<label class="field" for="url_{esc(channel)}">URL del post (opcional para publicación manual)</label>'
                 f'<input type="url" id="url_{esc(channel)}" name="url_{esc(channel)}" inputmode="url" '
                 f'placeholder="https://…" autocomplete="off"></div>')
-        intro = ("Marca solo los canales que hayas comprobado. Puedes conciliar varios a la vez; "
-                 "el ID se obtiene de la URL.")
+        intro = ("Marca solo los canales que hayas comprobado. Puedes conciliar varios a la vez. "
+                 "Para una publicación manual sin enlace, confirma tu nombre y lo que publicaste.")
         parts.append(f'<section class="card"><h2>Conciliar canales</h2><p class="meta">{intro}</p>'
                      f'<form method="post"><input type="hidden" name="action" value="reconcile">'
                      f'<input type="hidden" name="version" value="{item["version"]}">{"".join(rows)}'
+                     f'<label class="field" for="confirmed_by">Quién confirma la publicación manual</label>'
+                     f'<input type="text" id="confirmed_by" name="confirmed_by" autocomplete="name">'
+                     f'<label class="field" for="evidence">Confirmación de publicación manual</label>'
+                     f'<textarea id="evidence" name="evidence" placeholder="Confirmo que publiqué esta noticia en los canales marcados"></textarea>'
                      f'<div class="inline-action"><button class="secondary">Guardar conciliación</button></div>'
                      f'</form></section>')
 
@@ -225,7 +244,7 @@ def render_review(item, asset_url):
     for channel, payload in payloads.items():
         tone, label = _channel_status(item, channel)
         heading, text = _payload_text(channel, payload, wordpress_url)
-        is_published = label == "Publicado"
+        is_published = tone == "ok"
         checked = "" if is_published else " checked"
         disabled = " disabled" if is_published else ""
         count = ""
@@ -299,13 +318,14 @@ class EditorialHTTP:
                            "La noticia ha cambiado desde que abriste la página. Recárgala.")
                 if value("action") == "reconcile":
                     entries = [{"channel": c, "outcome": value("outcome_" + c), "url": value("url_" + c),
-                                "external_id": value("id_" + c)}
+                                "external_id": value("id_" + c), "confirmed_by": value("confirmed_by"),
+                                "evidence": value("evidence")}
                                for c in reconcilable_channels(item) if value("outcome_" + c)]
                     flow.check(entries, "No has marcado ningún canal como publicado o no publicado.")
                     saved = await self.service.queue.transition(
                         news_id, item["version"], lambda current: reconcile_many(current, entries, value("actor")))
                     done = ", ".join(f'{CHANNEL_LABELS.get(x["channel"], x["channel"])}: '
-                                     f'{"publicado" if x["outcome"] == "published" else "liberado para reintentar"}'
+                                     f'{"publicado" if x["outcome"] != "absent" else "liberado para reintentar"}'
                                      for x in entries)
                     status = ("La noticia queda publicada en todos los canales." if saved.get("estado") == "publicada"
                               else "Vuelve al chat para continuar.")
